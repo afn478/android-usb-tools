@@ -29,17 +29,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var approvalTimer: Timer?
     private var promptedForApproval = false
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // The background permission is tied to where the app lives, so make
-        // sure that's the Applications folder before asking for it.
-        if moveToApplicationsIfNeeded() { return }
+    /// The background permission is tied to where the app lives, so it's only
+    /// requested once the app has been dragged into /Applications.
+    private let isInApplications =
+        Bundle.main.bundleURL.resolvingSymlinksInPath().deletingLastPathComponent().path == applicationsURL.path
 
+    func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let menu = NSMenu()
         menu.delegate = self
         statusItem.menu = menu
 
         watchStatus()
+        guard isInApplications else {
+            refresh()
+            return
+        }
         if !UserDefaults.standard.bool(forKey: "didSetUpLoginItem") {
             try? SMAppService.mainApp.register()
             UserDefaults.standard.set(true, forKey: "didSetUpLoginItem")
@@ -49,49 +54,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // MARK: Installation
-
-    /// Returns true if the app is relaunching from /Applications or quitting.
-    private func moveToApplicationsIfNeeded() -> Bool {
-        let bundleURL = Bundle.main.bundleURL.resolvingSymlinksInPath()
-        if bundleURL.deletingLastPathComponent().path == applicationsURL.path { return false }
-
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Move \(appName) to your Applications folder?"
-        alert.informativeText = "\(appName) needs to be in your Applications folder to work."
-        alert.addButton(withTitle: "Move to Applications")
-        alert.addButton(withTitle: "Quit")
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            NSApp.terminate(nil)
-            return true
-        }
-
-        let destination = applicationsURL.appendingPathComponent(bundleURL.lastPathComponent)
-        do {
-            for app in NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier!)
-            where app != .current {
-                app.terminate()
-            }
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.trashItem(at: destination, resultingItemURL: nil)
-            }
-            try FileManager.default.copyItem(at: bundleURL, to: destination)
-        } catch {
-            let failure = NSAlert()
-            failure.messageText = "\(appName) couldn’t be moved"
-            failure.informativeText = "Drag \(appName) into your Applications folder yourself, then open it from there."
-            failure.runModal()
-            NSApp.terminate(nil)
-            return true
-        }
-
-        let config = NSWorkspace.OpenConfiguration()
-        config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: destination, configuration: config) { _, _ in
-            DispatchQueue.main.async { NSApp.terminate(nil) }
-        }
-        return true
-    }
 
     private func registerHelper() {
         if tethering.status == .notRegistered || tethering.status == .notFound {
@@ -221,10 +183,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private enum State {
-        case needsApproval, notRunning, waiting, connecting(String), connected([String: Any])
+        case notInApplications, needsApproval, notRunning, waiting, connecting(String), connected([String: Any])
     }
 
     private var state: State {
+        if !isInApplications { return .notInApplications }
         switch tethering.status {
         case .requiresApproval: return .needsApproval
         case .enabled: break
@@ -249,7 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case .connecting, .waiting:
             button.image = cableGlyph
             button.appearsDisabled = true
-        case .needsApproval, .notRunning:
+        case .notInApplications, .needsApproval, .notRunning:
             button.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: appName)
             button.image?.isTemplate = true
             button.appearsDisabled = false
@@ -279,6 +242,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         header("USB Tethering")
         switch state {
+        case .notInApplications:
+            info("Move \(appName) to your Applications folder,")
+            info("then open it from there to set up tethering")
         case .connected(let s):
             info("Connected to \(s["Device"] as? String ?? "your phone")")
             info("Your Mac is using the phone’s internet")

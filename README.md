@@ -26,8 +26,8 @@ Android USB Tools installs the tethering helper as a background service via
 make dmg        # builds build/AndroidUSBTools.dmg
 ```
 
-Open the disk image and drag the app into Applications. On first launch it
-offers to move itself there if needed, then asks you to switch it on under
+Open the disk image and drag the app into Applications, then open it from
+there. It asks you to switch it on under
 System Settings → General → Login Items → Allow in the Background (Touch ID or
 password). After that it starts at login and handles plug/unplug on its own.
 “Remove Android USB Tools…” in the menu undoes all of it.
