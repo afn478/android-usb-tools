@@ -30,7 +30,7 @@ Open the disk image and drag the app into Applications, then open it from
 there. It asks you to switch it on under
 System Settings → General → Login Items → Allow in the Background (Touch ID or
 password). After that it starts at login and handles plug/unplug on its own.
-“Remove Android USB Tools…” in the menu undoes all of it.
+To uninstall, move the app to the Trash; the helper notices and shuts down.
 
 Logs go to `/var/log/rndis-tether.log`.
 

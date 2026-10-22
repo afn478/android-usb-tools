@@ -126,27 +126,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refresh()
     }
 
-    @objc private func removeApp() {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Remove \(appName) from this Mac?"
-        alert.informativeText = "Your Mac will no longer be able to use your phone’s internet over USB."
-        alert.addButton(withTitle: "Remove")
-        alert.addButton(withTitle: "Cancel")
-        alert.buttons[0].hasDestructiveAction = true
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-
-        try? SMAppService.mainApp.unregister()
-        tethering.unregister { _ in
-            DispatchQueue.main.async {
-                UserDefaults.standard.removePersistentDomain(forName: Bundle.main.bundleIdentifier!)
-                NSWorkspace.shared.recycle([Bundle.main.bundleURL]) { _, _ in
-                    DispatchQueue.main.async { NSApp.terminate(nil) }
-                }
-            }
-        }
-    }
-
     @objc private func toggleLoginItem() {
         let app = SMAppService.mainApp
         do {
@@ -269,7 +248,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         let login = action("Open at Login", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        _ = action("Remove \(appName)…", #selector(removeApp))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit \(appName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }

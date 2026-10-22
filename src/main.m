@@ -24,6 +24,8 @@
 #include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <mach-o/dyld.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -109,6 +111,7 @@ static int g_tunFd = -1;
 static char g_tunName[IFNAMSIZ];
 static SCDynamicStoreRef g_store;
 static SCDynamicStoreRef g_statusStore;
+static char g_exePath[PATH_MAX];
 
 #pragma mark - Helpers
 
@@ -744,9 +747,20 @@ static void close_usb(void) {
     g_data = g_ctrl = nil;
 }
 
+// Moving the app to the Trash doesn't stop a registered daemon, so the helper
+// watches its own executable and shuts down once the app is gone.
+static bool app_removed(void) {
+    struct stat st;
+    if (!g_exePath[0] || stat(g_exePath, &st) == 0) return false;
+    logmsg("app was removed; shutting down");
+    atomic_store(&g_stop, true);
+    atomic_store(&g_dead, true);
+    return true;
+}
+
 static void wait_dead(double seconds) {
     double until = now_s() + seconds;
-    while (!atomic_load(&g_dead) && now_s() < until) usleep(200000);
+    while (!atomic_load(&g_dead) && now_s() < until && !app_removed()) usleep(500000);
 }
 
 // Runs one device session until unplug, error, lease loss or shutdown.
@@ -886,6 +900,9 @@ int main(int argc, char **argv) {
             return 1;
         }
 
+        uint32_t len = sizeof g_exePath;
+        char raw[PATH_MAX];
+        if (_NSGetExecutablePath(raw, &len) == 0 && !realpath(raw, g_exePath)) g_exePath[0] = 0;
         if (!g_probe) g_statusStore = SCDynamicStoreCreate(NULL, CFSTR("rndis-tether-status"), NULL, NULL);
         signal(SIGPIPE, SIG_IGN);
         static dispatch_source_t sigs[2];
@@ -919,6 +936,7 @@ int main(int argc, char **argv) {
                         return 1;
                     }
                     sleep(2);
+                    app_removed();
                     continue;
                 }
                 waiting = false;

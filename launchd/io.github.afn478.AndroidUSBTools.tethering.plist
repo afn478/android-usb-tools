@@ -12,8 +12,12 @@
     </array>
     <key>RunAtLoad</key>
     <true/>
+    <!-- Restart after crashes, but not after a clean exit (e.g. the app was deleted). -->
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>StandardErrorPath</key>
     <string>/var/log/rndis-tether.log</string>
 </dict>
