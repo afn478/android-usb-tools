@@ -57,7 +57,23 @@ install: $(APP_STAMP)
 	cp -R "$(APP)" /Applications/
 	open "/Applications/$(NAME).app"
 
+# MTP experiments: a probe that lists the phone, and a macFUSE mount (needs
+# macFUSE: brew install --cask macfuse).
+MTP_CFLAGS := -fobjc-arc -O2 -Wall -Wextra -Wno-unused-parameter -mmacosx-version-min=26.0
+MTP_FRAMEWORKS := -framework Foundation -framework IOKit -framework IOUSBHost
+
+build/mtp-probe: mtp/MTPDevice.m mtp/MTPDevice.h mtp/probe.m
+	@mkdir -p build
+	clang $(MTP_CFLAGS) $(MTP_FRAMEWORKS) -o $@ mtp/MTPDevice.m mtp/probe.m
+
+build/mtpfs: mtp/MTPDevice.m mtp/MTPDevice.h mtp/mtpfs.m
+	@mkdir -p build
+	clang $(MTP_CFLAGS) -I/usr/local/include/fuse3 $(MTP_FRAMEWORKS) -L/usr/local/lib -lfuse3 \
+		-Wl,-rpath,/usr/local/lib -o $@ mtp/MTPDevice.m mtp/mtpfs.m
+
+mtp: build/mtp-probe build/mtpfs
+
 clean:
 	rm -rf build
 
-.PHONY: all dmg install clean
+.PHONY: all dmg install clean mtp

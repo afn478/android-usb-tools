@@ -1,0 +1,186 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000001 /* MTPFSExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* MTPFSExtension.swift */; };
+		A10000000000000000000002 /* MTPFileSystem.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* MTPFileSystem.m */; };
+		A10000000000000000000003 /* MTPVolume.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* MTPVolume.m */; };
+		A10000000000000000000004 /* MTPDevice.m in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* MTPDevice.m */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* MTPFSExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MTPFSExtension.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* MTPFileSystem.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTPFileSystem.m; sourceTree = "<group>"; };
+		A20000000000000000000003 /* MTPVolume.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MTPVolume.m; sourceTree = "<group>"; };
+		A20000000000000000000004 /* MTPDevice.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = MTPDevice.m; path = ../mtp/MTPDevice.m; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000005 /* MTPFileSystem.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTPFileSystem.h; sourceTree = "<group>"; };
+		A20000000000000000000006 /* MTPVolume.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MTPVolume.h; sourceTree = "<group>"; };
+		A20000000000000000000007 /* MTPDevice.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = MTPDevice.h; path = ../mtp/MTPDevice.h; sourceTree = SOURCE_ROOT; };
+		A20000000000000000000008 /* MTPFS-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "MTPFS-Bridging-Header.h"; sourceTree = "<group>"; };
+		A20000000000000000000009 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A2000000000000000000000A /* MTPFS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MTPFS.entitlements; sourceTree = "<group>"; };
+		A2000000000000000000000B /* MTPFS.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.extensionkit-extension"; includeInIndex = 0; path = MTPFS.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001 /* MTPFSExtension.swift */,
+				A20000000000000000000005 /* MTPFileSystem.h */,
+				A20000000000000000000002 /* MTPFileSystem.m */,
+				A20000000000000000000006 /* MTPVolume.h */,
+				A20000000000000000000003 /* MTPVolume.m */,
+				A20000000000000000000007 /* MTPDevice.h */,
+				A20000000000000000000004 /* MTPDevice.m */,
+				A20000000000000000000008 /* MTPFS-Bridging-Header.h */,
+				A20000000000000000000009 /* Info.plist */,
+				A2000000000000000000000A /* MTPFS.entitlements */,
+				A40000000000000000000002 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A40000000000000000000002 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A2000000000000000000000B /* MTPFS.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A50000000000000000000001 /* MTPFS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A70000000000000000000002 /* Build configuration list for PBXNativeTarget "MTPFS" */;
+			buildPhases = (
+				A60000000000000000000001 /* Sources */,
+				A30000000000000000000001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MTPFS;
+			productName = MTPFS;
+			productReference = A2000000000000000000000B /* MTPFS.appex */;
+			productType = "com.apple.product-type.extensionkit-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2700;
+			};
+			buildConfigurationList = A70000000000000000000001 /* Build configuration list for PBXProject "MTPFS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A40000000000000000000001;
+			productRefGroup = A40000000000000000000002 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A50000000000000000000001 /* MTPFS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A60000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000000000000000000001 /* MTPFSExtension.swift in Sources */,
+				A10000000000000000000002 /* MTPFileSystem.m in Sources */,
+				A10000000000000000000003 /* MTPVolume.m in Sources */,
+				A10000000000000000000004 /* MTPDevice.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A80000000000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		A80000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = MTPFS.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = "$(SRCROOT)/../mtp";
+				INFOPLIST_FILE = Info.plist;
+				OTHER_LDFLAGS = (
+					"-framework",
+					FSKit,
+					"-framework",
+					IOUSBHost,
+					"-framework",
+					IOKit,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.afn478.AndroidUSBTools.mtpfs;
+				PRODUCT_NAME = MTPFS;
+				SKIP_INSTALL = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "MTPFS-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A70000000000000000000001 /* Build configuration list for PBXProject "MTPFS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80000000000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A70000000000000000000002 /* Build configuration list for PBXNativeTarget "MTPFS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A00000000000000000000001 /* Project object */;
+}
