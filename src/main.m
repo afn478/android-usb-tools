@@ -748,11 +748,24 @@ static void close_usb(void) {
 }
 
 // Moving the app to the Trash doesn't stop a registered daemon, so the helper
-// watches its own executable and shuts down once the app is gone.
+// watches its own executable and shuts down once the app is gone. Replacing
+// the app (an update, make install) swaps in a new file, possibly faster than
+// we look; then exit with an error instead so launchd starts the new copy.
+static bool g_updated;
+static ino_t g_exeInode;
+
 static bool app_removed(void) {
     struct stat st;
-    if (!g_exePath[0] || stat(g_exePath, &st) == 0) return false;
-    logmsg("app was removed; shutting down");
+    if (!g_exePath[0]) return false;
+    if (stat(g_exePath, &st) == 0) {
+        if (st.st_ino == g_exeInode) return false;
+        g_updated = true;
+    }
+    for (int i = 0; i < 30 && !g_updated; i++) {
+        usleep(500000);
+        g_updated = stat(g_exePath, &st) == 0;
+    }
+    logmsg(g_updated ? "app was updated; restarting" : "app was removed; shutting down");
     atomic_store(&g_stop, true);
     atomic_store(&g_dead, true);
     return true;
@@ -903,6 +916,8 @@ int main(int argc, char **argv) {
         uint32_t len = sizeof g_exePath;
         char raw[PATH_MAX];
         if (_NSGetExecutablePath(raw, &len) == 0 && !realpath(raw, g_exePath)) g_exePath[0] = 0;
+        struct stat exe;
+        if (g_exePath[0] && stat(g_exePath, &exe) == 0) g_exeInode = exe.st_ino;
         if (!g_probe) g_statusStore = SCDynamicStoreCreate(NULL, CFSTR("rndis-tether-status"), NULL, NULL);
         signal(SIGPIPE, SIG_IGN);
         static dispatch_source_t sigs[2];
@@ -951,5 +966,6 @@ int main(int argc, char **argv) {
             }
         }
     }
-    return 0;
+    // launchd only restarts the helper after a failure (see the plist).
+    return g_updated ? 75 : 0;
 }
