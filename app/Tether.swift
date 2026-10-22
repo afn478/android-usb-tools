@@ -10,6 +10,7 @@ import SystemConfiguration
 private let statusKey = "State:/rndis-tether/Status" as CFString
 private let daemonPlist = "io.github.afn478.rndis-tether.plist"
 private let logPath = "/var/log/rndis-tether.log"
+private let applicationsURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
 
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -28,6 +29,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var promptedForApproval = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The background permission is tied to where the app lives, so make
+        // sure that's the Applications folder before asking for it.
+        if moveToApplicationsIfNeeded() { return }
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let menu = NSMenu()
         menu.delegate = self
@@ -42,7 +47,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refresh()
     }
 
-    // MARK: Helper registration
+    // MARK: Installation
+
+    /// Returns true if the app is relaunching from /Applications or quitting.
+    private func moveToApplicationsIfNeeded() -> Bool {
+        let bundleURL = Bundle.main.bundleURL.resolvingSymlinksInPath()
+        if bundleURL.deletingLastPathComponent().path == applicationsURL.path { return false }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Move Tether to your Applications folder?"
+        alert.informativeText = "Tether needs to be in your Applications folder to work."
+        alert.addButton(withTitle: "Move to Applications")
+        alert.addButton(withTitle: "Quit")
+        guard alert.runModal() == .alertFirstButtonReturn else {
+            NSApp.terminate(nil)
+            return true
+        }
+
+        let destination = applicationsURL.appendingPathComponent(bundleURL.lastPathComponent)
+        do {
+            for app in NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier!)
+            where app != .current {
+                app.terminate()
+            }
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.trashItem(at: destination, resultingItemURL: nil)
+            }
+            try FileManager.default.copyItem(at: bundleURL, to: destination)
+        } catch {
+            let failure = NSAlert()
+            failure.messageText = "Tether couldn’t be moved"
+            failure.informativeText = "Drag Tether into your Applications folder yourself, then open it from there."
+            failure.runModal()
+            NSApp.terminate(nil)
+            return true
+        }
+
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: destination, configuration: config) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
+        }
+        return true
+    }
 
     private func registerDaemon() {
         if daemon.status == .notRegistered || daemon.status == .notFound {
@@ -66,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     if self.daemon.status != .requiresApproval {
                         self.approvalTimer?.invalidate()
                         self.approvalTimer = nil
+                        if self.daemon.status == .enabled { self.announceReady() }
                     }
                     self.refresh()
                 }
@@ -76,39 +125,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func askForApproval() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Allow the Tether helper"
+        alert.messageText = "Finish setting up Tether"
         alert.informativeText = """
-            Tether needs a background helper with administrator rights to drive the phone's \
-            USB connection. Turn on “Tether” under “Allow in the Background” in System Settings; \
-            macOS will ask for your password or Touch ID.
+            To use your phone’s internet over a USB cable, Tether needs to run in the background.
+
+            In the window that opens, switch on Tether, then confirm with Touch ID or your password. \
+            You only need to do this once.
             """
-        alert.addButton(withTitle: "Open System Settings")
-        alert.addButton(withTitle: "Later")
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Not Now")
         if alert.runModal() == .alertFirstButtonReturn {
             SMAppService.openSystemSettingsLoginItems()
         }
     }
 
-    @objc private func approveHelper() {
+    private func announceReady() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Tether is ready"
+        alert.informativeText = """
+            Connect your phone with a USB cable and turn on USB tethering in its settings. \
+            Your Mac will start using the phone’s internet automatically.
+
+            Look for Tether’s icon in the menu bar to see when you’re connected.
+            """
+        alert.runModal()
+    }
+
+    @objc private func finishSetup() {
         registerDaemon()
         SMAppService.openSystemSettingsLoginItems()
     }
 
-    @objc private func uninstallHelper() {
-        daemon.unregister { [weak self] error in
-            DispatchQueue.main.async {
-                if let error {
-                    NSAlert(error: error).runModal()
-                }
-                self?.refresh()
-            }
-        }
-    }
-
-    @objc private func reinstallHelper() {
+    @objc private func restartSetup() {
         promptedForApproval = false
         registerDaemon()
         refresh()
+    }
+
+    @objc private func removeTether() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Remove Tether from this Mac?"
+        alert.informativeText = "Your Mac will no longer be able to use your phone’s internet over USB."
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        try? SMAppService.mainApp.unregister()
+        daemon.unregister { _ in
+            DispatchQueue.main.async {
+                UserDefaults.standard.removePersistentDomain(forName: Bundle.main.bundleIdentifier!)
+                NSWorkspace.shared.recycle([Bundle.main.bundleURL]) { _, _ in
+                    DispatchQueue.main.async { NSApp.terminate(nil) }
+                }
+            }
+        }
     }
 
     @objc private func toggleLoginItem() {
@@ -161,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         switch status["State"] as? String {
         case "connected": return .connected(status)
-        case "connecting": return .connecting(status["Device"] as? String ?? "phone")
+        case "connecting": return .connecting(status["Device"] as? String ?? "your phone")
         default: return .waiting
         }
     }
@@ -200,28 +273,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         switch state {
         case .connected(let s):
-            info("Connected to \(s["Device"] as? String ?? "phone")")
-            info("\(s["Address"] as? String ?? "?") via \(s["Router"] as? String ?? "?") on \(s["Interface"] as? String ?? "?")")
+            info("Connected to \(s["Device"] as? String ?? "your phone")")
+            info("Your Mac is using the phone’s internet")
+            menu.addItem(.separator())
+            info("IP Address: \(s["Address"] as? String ?? "–")")
+            info("Router: \(s["Router"] as? String ?? "–")")
+            info("Interface: \(s["Interface"] as? String ?? "–")")
         case .connecting(let device):
             info("Connecting to \(device)…")
         case .waiting:
-            info("Waiting for a phone")
-            info("Plug in and turn on USB tethering")
+            info("No phone connected")
+            info("Plug in your phone and turn on USB tethering")
         case .needsApproval:
-            info("Helper needs approval")
-            _ = action("Approve in System Settings…", #selector(approveHelper))
+            info("Setup isn’t finished")
+            _ = action("Finish Setup…", #selector(finishSetup))
         case .notRunning:
-            info("Helper isn't running")
-            _ = action("Install Helper", #selector(reinstallHelper))
+            info("Tether is turned off")
+            _ = action("Turn On Tether…", #selector(restartSetup))
         }
 
         menu.addItem(.separator())
         let login = action("Open at Login", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
         _ = action("Show Log", #selector(openLog))
-        if daemon.status == .enabled {
-            _ = action("Uninstall Helper", #selector(uninstallHelper))
-        }
+        _ = action("Remove Tether…", #selector(removeTether))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Tether", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }

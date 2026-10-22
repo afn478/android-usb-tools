@@ -12,24 +12,33 @@ network.
 
 ## Tether.app
 
-A menu bar app that installs the helper as a launchd daemon via `SMAppService`
-and shows its state:
+A menu bar app that installs the helper as a background service via
+`SMAppService` and shows its state:
 
 - hotspot icon: connected
 - dimmed hotspot icon: waiting for a phone, or connecting
-- warning icon: helper not approved or not running
+- warning icon: setup not finished, or Tether turned off
+
+### Installing
 
 ```sh
-make            # builds and signs build/Tether.app
-make install    # copies it to /Applications and launches it
+make dmg        # builds build/Tether.dmg
 ```
 
-On first launch, approve “Tether” under System Settings → General → Login Items
-→ Allow in the Background. After that the helper starts at boot and handles
-plug/unplug on its own. Logs go to `/var/log/rndis-tether.log`.
+Open the disk image and drag Tether into Applications. On first launch Tether
+offers to move itself there if needed, then asks you to switch it on under
+System Settings → General → Login Items → Allow in the Background (Touch ID or
+password). After that it starts at login and handles plug/unplug on its own.
+“Remove Tether…” in the menu undoes all of it.
+
+Logs go to `/var/log/rndis-tether.log`.
 
 Signing uses the first “Apple Development” identity in the keychain; override
-with `make SIGN_IDENTITY="..."`.
+with `make SIGN_IDENTITY="..."`. Sharing the disk image with other Macs needs a
+Developer ID certificate and notarization, or Gatekeeper will block it.
+
+`make install` replaces the copy in /Applications and relaunches it, for
+development.
 
 ## Running the helper by hand
 
