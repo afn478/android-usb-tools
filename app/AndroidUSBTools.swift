@@ -1,14 +1,15 @@
-// Tether: menu bar front end for the rndis-tether helper.
+// Android USB Tools: menu bar app for Android phones connected over USB.
 //
-// Registers the bundled helper as a launchd daemon via SMAppService and shows
-// the state the helper publishes in the dynamic store.
+// Registers the bundled tethering helper as a launchd daemon via SMAppService
+// and shows the state the helper publishes in the dynamic store.
 
 import AppKit
 import ServiceManagement
 import SystemConfiguration
 
+private let appName = "Android USB Tools"
 private let statusKey = "State:/rndis-tether/Status" as CFString
-private let daemonPlist = "io.github.afn478.rndis-tether.plist"
+private let tetheringPlist = "io.github.afn478.AndroidUSBTools.tethering.plist"
 private let logPath = "/var/log/rndis-tether.log"
 private let applicationsURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
 
@@ -22,7 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         app.run()
     }
 
-    private let daemon = SMAppService.daemon(plistName: daemonPlist)
+    private let tethering = SMAppService.daemon(plistName: tetheringPlist)
     private var statusItem: NSStatusItem!
     private var store: SCDynamicStore?
     private var approvalTimer: Timer?
@@ -43,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             try? SMAppService.mainApp.register()
             UserDefaults.standard.set(true, forKey: "didSetUpLoginItem")
         }
-        registerDaemon()
+        registerHelper()
         refresh()
     }
 
@@ -56,8 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Move Tether to your Applications folder?"
-        alert.informativeText = "Tether needs to be in your Applications folder to work."
+        alert.messageText = "Move \(appName) to your Applications folder?"
+        alert.informativeText = "\(appName) needs to be in your Applications folder to work."
         alert.addButton(withTitle: "Move to Applications")
         alert.addButton(withTitle: "Quit")
         guard alert.runModal() == .alertFirstButtonReturn else {
@@ -77,8 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             try FileManager.default.copyItem(at: bundleURL, to: destination)
         } catch {
             let failure = NSAlert()
-            failure.messageText = "Tether couldn’t be moved"
-            failure.informativeText = "Drag Tether into your Applications folder yourself, then open it from there."
+            failure.messageText = "\(appName) couldn’t be moved"
+            failure.informativeText = "Drag \(appName) into your Applications folder yourself, then open it from there."
             failure.runModal()
             NSApp.terminate(nil)
             return true
@@ -92,17 +93,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return true
     }
 
-    private func registerDaemon() {
-        if daemon.status == .notRegistered || daemon.status == .notFound {
+    private func registerHelper() {
+        if tethering.status == .notRegistered || tethering.status == .notFound {
             do {
-                try daemon.register()
+                try tethering.register()
             } catch {
                 // Registering an unapproved daemon reports an error but still
                 // leaves it waiting for approval in System Settings.
-                NSLog("Tether: register helper: \(error)")
+                NSLog("\(appName): register helper: \(error)")
             }
         }
-        if daemon.status == .requiresApproval {
+        if tethering.status == .requiresApproval {
             if !promptedForApproval {
                 promptedForApproval = true
                 askForApproval()
@@ -111,10 +112,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if approvalTimer == nil {
                 approvalTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
                     guard let self else { return }
-                    if self.daemon.status != .requiresApproval {
+                    if self.tethering.status != .requiresApproval {
                         self.approvalTimer?.invalidate()
                         self.approvalTimer = nil
-                        if self.daemon.status == .enabled { self.announceReady() }
+                        if self.tethering.status == .enabled { self.announceReady() }
                     }
                     self.refresh()
                 }
@@ -125,11 +126,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func askForApproval() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Finish setting up Tether"
+        alert.messageText = "Finish setting up \(appName)"
         alert.informativeText = """
-            To use your phone’s internet over a USB cable, Tether needs to run in the background.
+            To use your phone’s internet over a USB cable, \(appName) needs to run in the background.
 
-            In the window that opens, switch on Tether, then confirm with Touch ID or your password. \
+            In the window that opens, switch on \(appName), then confirm with Touch ID or your password. \
             You only need to do this once.
             """
         alert.addButton(withTitle: "Open Settings")
@@ -142,31 +143,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func announceReady() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Tether is ready"
+        alert.messageText = "\(appName) is ready"
         alert.informativeText = """
             Connect your phone with a USB cable and turn on USB tethering in its settings. \
             Your Mac will start using the phone’s internet automatically.
 
-            Look for Tether’s icon in the menu bar to see when you’re connected.
+            The cable icon in the menu bar shows when you’re connected.
             """
         alert.runModal()
     }
 
     @objc private func finishSetup() {
-        registerDaemon()
+        registerHelper()
         SMAppService.openSystemSettingsLoginItems()
     }
 
     @objc private func restartSetup() {
         promptedForApproval = false
-        registerDaemon()
+        registerHelper()
         refresh()
     }
 
-    @objc private func removeTether() {
+    @objc private func removeApp() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
-        alert.messageText = "Remove Tether from this Mac?"
+        alert.messageText = "Remove \(appName) from this Mac?"
         alert.informativeText = "Your Mac will no longer be able to use your phone’s internet over USB."
         alert.addButton(withTitle: "Remove")
         alert.addButton(withTitle: "Cancel")
@@ -174,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         try? SMAppService.mainApp.unregister()
-        daemon.unregister { _ in
+        tethering.unregister { _ in
             DispatchQueue.main.async {
                 UserDefaults.standard.removePersistentDomain(forName: Bundle.main.bundleIdentifier!)
                 NSWorkspace.shared.recycle([Bundle.main.bundleURL]) { _, _ in
@@ -206,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var ctx = SCDynamicStoreContext(
             version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
             retain: nil, release: nil, copyDescription: nil)
-        store = SCDynamicStoreCreate(nil, "Tether" as CFString, { _, _, info in
+        store = SCDynamicStoreCreate(nil, appName as CFString, { _, _, info in
             let me = Unmanaged<AppDelegate>.fromOpaque(info!).takeUnretainedValue()
             // The helper replaces the key by removing and re-adding it; let the
             // pair settle before redrawing so the icon doesn't flicker.
@@ -224,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private var state: State {
-        switch daemon.status {
+        switch tethering.status {
         case .requiresApproval: return .needsApproval
         case .enabled: break
         default: return .notRunning
@@ -241,20 +242,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func refresh() {
         guard let button = statusItem.button else { return }
-        let symbol: String
-        var dimmed = false
         switch state {
         case .connected:
-            symbol = "personalhotspot"
+            button.image = cableGlyph
+            button.appearsDisabled = false
         case .connecting, .waiting:
-            symbol = "personalhotspot"
-            dimmed = true
+            button.image = cableGlyph
+            button.appearsDisabled = true
         case .needsApproval, .notRunning:
-            symbol = "exclamationmark.triangle"
+            button.image = NSImage(systemSymbolName: "exclamationmark.triangle", accessibilityDescription: appName)
+            button.image?.isTemplate = true
+            button.appearsDisabled = false
         }
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Tether")
-        button.image?.isTemplate = true
-        button.appearsDisabled = dimmed
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -270,7 +269,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item)
             return item
         }
+        func header(_ title: String) {
+            if #available(macOS 14, *) {
+                menu.addItem(.sectionHeader(title: title))
+            } else {
+                info(title)
+            }
+        }
 
+        header("USB Tethering")
         switch state {
         case .connected(let s):
             info("Connected to \(s["Device"] as? String ?? "your phone")")
@@ -288,16 +295,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             info("Setup isn’t finished")
             _ = action("Finish Setup…", #selector(finishSetup))
         case .notRunning:
-            info("Tether is turned off")
-            _ = action("Turn On Tether…", #selector(restartSetup))
+            info("Tethering is turned off")
+            _ = action("Turn On Tethering…", #selector(restartSetup))
         }
+        _ = action("Show Log", #selector(openLog))
 
         menu.addItem(.separator())
         let login = action("Open at Login", #selector(toggleLoginItem))
         login.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        _ = action("Show Log", #selector(openLog))
-        _ = action("Remove Tether…", #selector(removeTether))
+        _ = action("Remove \(appName)…", #selector(removeApp))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Tether", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit \(appName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
+
+    // MARK: Menu bar glyph
+
+    /// The app icon's looped cable, redrawn as a single-colour template image.
+    private lazy var cableGlyph: NSImage = {
+        let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
+            // Same curve as the app icon: a prolate trochoid loop rising at 45°.
+            let a: CGFloat = 78, b: CGFloat = 150
+            func rotate(_ p: NSPoint) -> NSPoint {
+                let c = cos(CGFloat.pi / 4), s = sin(CGFloat.pi / 4)
+                return NSPoint(x: p.x * c - p.y * s, y: p.x * s + p.y * c)
+            }
+            // Anchor the plug (6pt long, drawn below) so its tip sits in the top-right corner.
+            let plugLength: CGFloat = 6
+            let scale = rect.width / 860
+            let base = rotate(NSPoint(x: a * .pi + 60, y: -2 * b))
+            let anchor = NSPoint(x: rect.maxX - 1 - plugLength * cos(.pi / 4), y: rect.maxY - 1 - plugLength * sin(.pi / 4))
+            func place(_ p: NSPoint) -> NSPoint {
+                let r = rotate(p)
+                return NSPoint(x: (r.x - base.x) * scale + anchor.x, y: (r.y - base.y) * scale + anchor.y)
+            }
+
+            let cable = NSBezierPath()
+            cable.move(to: place(NSPoint(x: -a * .pi - 400, y: -2 * b)))
+            for i in 0...200 {
+                let t = -CGFloat.pi + 2 * .pi * CGFloat(i) / 200
+                cable.line(to: place(NSPoint(x: a * t - b * sin(t), y: b * cos(t) - b)))
+            }
+            cable.line(to: place(NSPoint(x: a * .pi + 60, y: -2 * b)))
+            cable.lineWidth = 1.6
+            cable.lineCapStyle = .round
+            cable.lineJoinStyle = .round
+            NSColor.black.setStroke()
+            cable.stroke()
+
+            // Plug: overmold and metal shell along the cable's final heading.
+            let ctx = NSGraphicsContext.current!.cgContext
+            ctx.translateBy(x: anchor.x, y: anchor.y)
+            ctx.rotate(by: .pi / 4)
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: NSRect(x: 0, y: -2, width: 3.4, height: 4), xRadius: 1, yRadius: 1).fill()
+            NSBezierPath(roundedRect: NSRect(x: 3.8, y: -1.3, width: 2.2, height: 2.6), xRadius: 0.7, yRadius: 0.7).fill()
+            return true
+        }
+        image.isTemplate = true
+        image.accessibilityDescription = appName
+        return image
+    }()
 }

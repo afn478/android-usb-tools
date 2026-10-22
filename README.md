@@ -1,7 +1,8 @@
-# rndis-tether
+# Android USB Tools
 
-Userspace RNDIS driver for macOS, so Android USB tethering works without a kext,
-DriverKit entitlements, or touching SIP.
+A macOS menu bar app for Android phones connected over USB. It currently does
+USB tethering: a userspace RNDIS driver, so Android tethering works without a
+kext, DriverKit entitlements, or touching SIP.
 
 macOS ships drivers for CDC-ECM/NCM but not RNDIS, which is what most Android
 phones use for USB tethering. The helper claims the phone's RNDIS interfaces
@@ -10,26 +11,26 @@ interface. ARP and DHCP are handled in-process, and the resulting network is
 published to `configd`, so the default route and DNS get set up like any other
 network.
 
-## Tether.app
+## The app
 
-A menu bar app that installs the helper as a background service via
-`SMAppService` and shows its state:
+Android USB Tools installs the tethering helper as a background service via
+`SMAppService` and shows its state in the menu bar:
 
-- hotspot icon: connected
-- dimmed hotspot icon: waiting for a phone, or connecting
-- warning icon: setup not finished, or Tether turned off
+- cable icon: connected
+- dimmed cable icon: waiting for a phone, or connecting
+- warning icon: setup not finished, or tethering turned off
 
 ### Installing
 
 ```sh
-make dmg        # builds build/Tether.dmg
+make dmg        # builds build/AndroidUSBTools.dmg
 ```
 
-Open the disk image and drag Tether into Applications. On first launch Tether
+Open the disk image and drag the app into Applications. On first launch it
 offers to move itself there if needed, then asks you to switch it on under
 System Settings → General → Login Items → Allow in the Background (Touch ID or
 password). After that it starts at login and handles plug/unplug on its own.
-“Remove Tether…” in the menu undoes all of it.
+“Remove Android USB Tools…” in the menu undoes all of it.
 
 Logs go to `/var/log/rndis-tether.log`.
 
@@ -40,7 +41,7 @@ Developer ID certificate and notarization, or Gatekeeper will block it.
 `make install` replaces the copy in /Applications and relaunches it, for
 development.
 
-## Running the helper by hand
+## Running the tethering helper by hand
 
 ```sh
 build/rndis-tether --probe -v   # no root: handshake + DHCP lease, then exit

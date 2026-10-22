@@ -21,8 +21,8 @@ NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 func fromTop(_ y: CGFloat) -> CGFloat { size.height - y }
 
 NSGradient(
-    starting: NSColor(srgbRed: 0.98, green: 0.99, blue: 0.98, alpha: 1),
-    ending: NSColor(srgbRed: 0.92, green: 0.95, blue: 0.93, alpha: 1))!
+    starting: NSColor(srgbRed: 0.97, green: 0.97, blue: 0.99, alpha: 1),
+    ending: NSColor(srgbRed: 0.91, green: 0.92, blue: 0.97, alpha: 1))!
     .draw(in: NSRect(origin: .zero, size: size), angle: -90)
 
 func drawCentered(_ text: String, y: CGFloat, font: NSFont, color: NSColor) {
@@ -33,30 +33,30 @@ func drawCentered(_ text: String, y: CGFloat, font: NSFont, color: NSColor) {
     (text as NSString).draw(in: NSRect(x: 0, y: fromTop(y) - h / 2, width: size.width, height: h), withAttributes: attrs)
 }
 
-drawCentered("Install Tether", y: 52, font: .systemFont(ofSize: 22, weight: .semibold),
+drawCentered("Install Android USB Tools", y: 52, font: .systemFont(ofSize: 22, weight: .semibold),
              color: NSColor(white: 0.12, alpha: 1))
-drawCentered("Drag Tether into your Applications folder", y: 80, font: .systemFont(ofSize: 13),
+drawCentered("Drag the app into your Applications folder", y: 80, font: .systemFont(ofSize: 13),
              color: NSColor(white: 0.40, alpha: 1))
 
 // Arrow between the two icons.
-let green = NSColor(srgbRed: 0.13, green: 0.66, blue: 0.38, alpha: 1)
+let accent = NSColor(srgbRed: 0.18, green: 0.27, blue: 0.85, alpha: 1)  // the icon's ultramarine
 let arrowY = fromTop(180)
 let shaft = NSBezierPath()
 shaft.move(to: NSPoint(x: 245, y: arrowY))
 shaft.line(to: NSPoint(x: 345, y: arrowY))
 shaft.lineWidth = 5
 shaft.lineCapStyle = .round
-green.setStroke()
+accent.setStroke()
 shaft.stroke()
 let head = NSBezierPath()
 head.move(to: NSPoint(x: 360, y: arrowY))
 head.line(to: NSPoint(x: 340, y: arrowY + 14))
 head.line(to: NSPoint(x: 340, y: arrowY - 14))
 head.close()
-green.setFill()
+accent.setFill()
 head.fill()
 
-drawCentered("Then open Tether from Applications and follow the setup.", y: 330,
+drawCentered("Then open it from Applications and follow the setup.", y: 330,
              font: .systemFont(ofSize: 12), color: NSColor(white: 0.45, alpha: 1))
 
 NSGraphicsContext.restoreGraphicsState()

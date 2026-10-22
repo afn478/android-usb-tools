@@ -1,10 +1,10 @@
 #!/bin/bash
 # Builds a drag-to-install disk image with a laid-out Finder window.
-# Usage: tools/make-dmg.sh <Tether.app> <icon.icns> <output.dmg> <signing identity>
+# Usage: tools/make-dmg.sh <app bundle> <icon.icns> <output.dmg> <signing identity>
 set -euo pipefail
 
 app=$1 icns=$2 out=$3 identity=$4
-volname=Tether
+volname="Android USB Tools"
 work=$(mktemp -d)
 trap 'hdiutil detach -quiet "$work/mnt" 2>/dev/null || true; rm -rf "$work"' EXIT
 
