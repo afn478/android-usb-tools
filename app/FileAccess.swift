@@ -45,6 +45,9 @@ final class FileAccess {
     private var phone: Phone?
     private var process: Process?
     private var attempts = 0
+    /// The phone went away while mtpfs was running; its exit is then a
+    /// disconnect, not an eject, even if the phone is already back.
+    private var disconnectedSinceLaunch = false
 
     init(onChange: @escaping () -> Void) {
         self.onChange = onChange
@@ -123,7 +126,7 @@ final class FileAccess {
         // mtpfs notices the unplug itself and unmounts; here only forget the
         // phone so an eject doesn't stick to the next connection.
         phone = nil
-        if process == nil { state = .noPhone }
+        if process == nil { state = .noPhone } else { disconnectedSinceLaunch = true }
     }
 
     private func drain(_ it: io_iterator_t) {
@@ -150,6 +153,7 @@ final class FileAccess {
             return
         }
         guard process == nil, let exe = Bundle.main.url(forAuxiliaryExecutable: "mtpfs") else { return }
+        disconnectedSinceLaunch = false
         let mountPoint = freeMountPoint(for: phone.name)
         try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: Self.logURL.path) {
@@ -221,6 +225,18 @@ final class FileAccess {
         // mtpfs pauses Image Capture's ptpcamerad while mounted and resumes it
         // on exit; make sure of that even if it crashed.
         if p.terminationReason == .uncaughtSignal { resumeImageCapture() }
+        if disconnectedSinceLaunch {
+            // A replug or mode switch can bring the phone back before the old
+            // mtpfs has exited; mount it now that the way is clear.
+            disconnectedSinceLaunch = false
+            if let current = self.phone {
+                attempts = 0
+                launch(current)
+            } else {
+                state = .noPhone
+            }
+            return
+        }
         let stillConnected = self.phone == phone
         if case .ejected = state { return }
         if p.terminationStatus == 0 {
