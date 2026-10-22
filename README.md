@@ -26,6 +26,8 @@ Android USB Tools installs the tethering helper as a background service via
 
 ### Installing
 
+Needs macOS 26 or later.
+
 ```sh
 make dmg        # builds build/AndroidUSBTools.dmg
 ```

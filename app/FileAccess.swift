@@ -94,9 +94,15 @@ final class FileAccess {
         if case .mounted(_, let url) = state { NSWorkspace.shared.open(url) }
     }
 
+    /// Asks mtpfs to unmount on quit. Waits briefly rather than with
+    /// waitUntilExit, which can hang the quit when the exit notification has
+    /// already gone by; mtpfs also exits by itself once the app is gone.
     func stop() {
-        process?.terminate()
-        process?.waitUntilExit()
+        guard let p = process, p.isRunning else { return }
+        let pid = p.processIdentifier
+        p.terminate()
+        let deadline = Date().addingTimeInterval(3)
+        while kill(pid, 0) == 0, Date() < deadline { usleep(50_000) }
     }
 
     // MARK: Device notifications

@@ -22,7 +22,7 @@ build/rndis-tether: src/main.m
 
 build/$(EXE): app/AndroidUSBTools.swift app/FileAccess.swift app/PhoneWatcher.swift
 	@mkdir -p build
-	swiftc -O -parse-as-library -target $(ARCH)-apple-macos13.0 -o $@ $^
+	swiftc -O -parse-as-library -target $(ARCH)-apple-macos26.0 -o $@ $^
 
 build/AppIcon.icns: tools/make-icon.swift
 	@mkdir -p build/AppIcon.iconset
@@ -40,6 +40,7 @@ $(APP_STAMP): build/rndis-tether build/mtpfs mtp/mtpfs.entitlements build/$(EXE)
 	cp build/AppIcon.icns "$(APP)/Contents/Resources/"
 	cp launchd/$(HELPER_PLIST) "$(APP)/Contents/Library/LaunchDaemons/"
 	cp build/$(EXE) build/rndis-tether build/mtpfs "$(APP)/Contents/MacOS/"
+	strip -S -x "$(APP)/Contents/MacOS/$(EXE)" "$(APP)/Contents/MacOS/rndis-tether" "$(APP)/Contents/MacOS/mtpfs"
 	$(SIGN) --identifier io.github.afn478.AndroidUSBTools.tethering "$(APP)/Contents/MacOS/rndis-tether"
 	$(SIGN) --identifier io.github.afn478.AndroidUSBTools.mtpfs --entitlements mtp/mtpfs.entitlements "$(APP)/Contents/MacOS/mtpfs"
 	$(SIGN) "$(APP)"
