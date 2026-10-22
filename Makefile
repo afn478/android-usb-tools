@@ -44,10 +44,10 @@ $(APP_STAMP): build/rndis-tether build/$(EXE) build/AppIcon.icns app/Info.plist 
 	$(SIGN) "$(APP)"
 	touch $@
 
-# Drag-to-install disk image.
+# Disk image with the app and a link to Applications.
 dmg: $(DMG)
 
-$(DMG): $(APP_STAMP) tools/make-dmg.sh tools/make-dmg-background.swift
+$(DMG): $(APP_STAMP) tools/make-dmg.sh
 	tools/make-dmg.sh "$(APP)" build/AppIcon.icns $@ "$(SIGN_IDENTITY)"
 
 # Developer shortcut: replace the installed copy and relaunch it.
