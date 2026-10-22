@@ -20,9 +20,9 @@ build/rndis-tether: src/main.m
 	@mkdir -p build
 	clang $(CFLAGS) $(FRAMEWORKS) -o $@ $<
 
-build/$(EXE): app/AndroidUSBTools.swift
+build/$(EXE): app/AndroidUSBTools.swift app/FileAccess.swift
 	@mkdir -p build
-	swiftc -O -parse-as-library -target $(ARCH)-apple-macos13.0 -o $@ $<
+	swiftc -O -parse-as-library -target $(ARCH)-apple-macos13.0 -o $@ $^
 
 build/AppIcon.icns: tools/make-icon.swift
 	@mkdir -p build/AppIcon.iconset
@@ -33,14 +33,15 @@ build/AppIcon.icns: tools/make-icon.swift
 	done
 	iconutil -c icns -o $@ build/AppIcon.iconset
 
-$(APP_STAMP): build/rndis-tether build/$(EXE) build/AppIcon.icns app/Info.plist launchd/$(HELPER_PLIST)
+$(APP_STAMP): build/rndis-tether build/mtpfs mtp/mtpfs.entitlements build/$(EXE) build/AppIcon.icns app/Info.plist launchd/$(HELPER_PLIST)
 	rm -rf "$(APP)"
 	mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources" "$(APP)/Contents/Library/LaunchDaemons"
 	cp app/Info.plist "$(APP)/Contents/"
 	cp build/AppIcon.icns "$(APP)/Contents/Resources/"
 	cp launchd/$(HELPER_PLIST) "$(APP)/Contents/Library/LaunchDaemons/"
-	cp build/$(EXE) build/rndis-tether "$(APP)/Contents/MacOS/"
+	cp build/$(EXE) build/rndis-tether build/mtpfs "$(APP)/Contents/MacOS/"
 	$(SIGN) --identifier io.github.afn478.AndroidUSBTools.tethering "$(APP)/Contents/MacOS/rndis-tether"
+	$(SIGN) --identifier io.github.afn478.AndroidUSBTools.mtpfs --entitlements mtp/mtpfs.entitlements "$(APP)/Contents/MacOS/mtpfs"
 	$(SIGN) "$(APP)"
 	touch $@
 
@@ -57,8 +58,9 @@ install: $(APP_STAMP)
 	cp -R "$(APP)" /Applications/
 	open "/Applications/$(NAME).app"
 
-# MTP experiments: a probe that lists the phone, and a macFUSE mount (needs
-# macFUSE: brew install --cask macfuse).
+# File access: mtpfs mounts a phone in File transfer mode through macFUSE
+# (building and running it needs macFUSE: brew install --cask macfuse);
+# mtp-probe lists and checksums files for debugging.
 MTP_CFLAGS := -fobjc-arc -O2 -Wall -Wextra -Wno-unused-parameter -mmacosx-version-min=26.0
 MTP_FRAMEWORKS := -framework Foundation -framework IOKit -framework IOUSBHost
 

@@ -110,11 +110,9 @@ typedef NS_ENUM(NSInteger, MTPItemKind) {
         _freeBytes = free;
     } else {
         uint32_t parent = dir.kind == MTPItemKindStorage ? MTPRootParent : dir.handle;
-        NSArray *handles = [_device objectHandlesInStorage:dir.storageID parent:parent error:error];
-        if (!handles) return nil;
-        for (NSNumber *h in handles) {
-            MTPObjectInfo *info = [_device objectInfo:h.unsignedIntValue error:error];
-            if (!info) return nil;
+        NSArray<MTPObjectInfo *> *objs = [_device objectsInStorage:dir.storageID parent:parent error:error];
+        if (!objs) return nil;
+        for (MTPObjectInfo *info in objs) {
             // A name with "/" can't be represented; skip it rather than fail the listing.
             if (!info.filename.length || [info.filename containsString:@"/"]) continue;
             MTPItem *item = [self itemForID:kObjectBase + info.handle];

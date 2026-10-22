@@ -19,10 +19,19 @@ enum {
     kOpGetStorageInfo = 0x1005,
     kOpGetObjectHandles = 0x1007,
     kOpGetObjectInfo = 0x1008,
+    kOpDeleteObject = 0x100B,
+    kOpSendObjectInfo = 0x100C,
+    kOpSendObject = 0x100D,
+    kOpMoveObject = 0x1019,
     kOpGetPartialObject = 0x101B,
     kOpGetObjectPropValue = 0x9803,
+    kOpSetObjectPropValue = 0x9804,
     kOpGetObjectPropList = 0x9805,
     kOpAndroidGetPartialObject64 = 0x95C1,
+    kOpAndroidSendPartialObject = 0x95C2,
+    kOpAndroidTruncateObject = 0x95C3,
+    kOpAndroidBeginEditObject = 0x95C4,
+    kOpAndroidEndEditObject = 0x95C5,
 };
 
 enum {
@@ -109,6 +118,30 @@ static NSArray<NSNumber *> *rd32array(Reader *r) {
     return a;
 }
 
+static void wr16(NSMutableData *d, uint16_t v) { uint8_t b[2]; put16(b, v); [d appendBytes:b length:2]; }
+static void wr32(NSMutableData *d, uint32_t v) { uint8_t b[4]; put32(b, v); [d appendBytes:b length:4]; }
+
+static void wrstr(NSMutableData *d, NSString *s) {
+    NSData *u = [s dataUsingEncoding:NSUTF16LittleEndianStringEncoding];
+    NSUInteger units = MIN(u.length / 2, 254u);
+    if (!units) {
+        uint8_t zero = 0;
+        [d appendBytes:&zero length:1];
+        return;
+    }
+    uint8_t n = (uint8_t)(units + 1);
+    [d appendBytes:&n length:1];
+    [d appendBytes:u.bytes length:units * 2];
+    wr16(d, 0);
+}
+
+static NSString *format_date(NSDate *date) {
+    NSDateFormatter *f = [NSDateFormatter new];
+    f.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    f.dateFormat = @"yyyyMMdd'T'HHmmss";
+    return [f stringFromDate:date];
+}
+
 // Reads one property value of a PTP data type; returns NO for types it can't size.
 static BOOL rdvalue(Reader *r, uint16_t type, uint64_t *num, NSString **str) {
     if (type == 0xFFFF) {
@@ -163,7 +196,7 @@ static NSDate *parse_date(NSString *s) {
 @implementation MTPDevice {
     IOUSBHostInterface *_iface;
     IOUSBHostPipe *_in, *_out;
-    NSUInteger _inPacket;
+    NSUInteger _inPacket, _outPacket;
     NSMutableData *_rx;
     uint32_t _tid;
     BOOL _sessionOpen;
@@ -258,8 +291,8 @@ static IOUSBHostPipe *find_pipe(IOUSBHostInterface *iface, int xferType, bool in
         return nil;
     }
     _in = find_pipe(_iface, kIOUSBEndpointTypeBulk, true, &_inPacket);
-    _out = find_pipe(_iface, kIOUSBEndpointTypeBulk, false, NULL);
-    if (!_in || !_out || !_inPacket) {
+    _out = find_pipe(_iface, kIOUSBEndpointTypeBulk, false, &_outPacket);
+    if (!_in || !_out || !_inPacket || !_outPacket) {
         if (error) *error = mtp_error(2, @"MTP interface has no bulk endpoints");
         [self close];
         return nil;
@@ -335,7 +368,7 @@ static IOUSBHostPipe *find_pipe(IOUSBHostInterface *iface, int xferType, bool in
 - (BOOL)bulkOut:(NSData *)data error:(NSError **)error {
     NSError *err = nil;
     NSUInteger n = 0;
-    NSMutableData *buf = [data mutableCopy];
+    NSMutableData *buf = data.length ? [data mutableCopy] : nil;
     if (![_out sendIORequestWithData:buf bytesTransferred:&n completionTimeout:kTimeout error:&err] || n != data.length) {
         if (error) *error = mtp_error(3, @"USB write: %@", err.localizedDescription);
         return NO;
@@ -343,9 +376,15 @@ static IOUSBHostPipe *find_pipe(IOUSBHostInterface *iface, int xferType, bool in
     return YES;
 }
 
-// One transaction without a host-to-device data phase. Data the phone sends
-// is appended to `data`; response parameters land in `resp` (up to 5).
 - (BOOL)transact:(uint16_t)code params:(const uint32_t *)params count:(int)count
+            data:(NSMutableData *)data response:(uint32_t *)resp error:(NSError **)error {
+    return [self transact:code params:params count:count send:nil data:data response:resp error:error];
+}
+
+// One transaction. `send`, if given, goes to the phone as the data phase;
+// data the phone sends is appended to `data`; response parameters land in
+// `resp` (up to 5).
+- (BOOL)transact:(uint16_t)code params:(const uint32_t *)params count:(int)count send:(NSData *)send
             data:(NSMutableData *)data response:(uint32_t *)resp error:(NSError **)error {
     if (atomic_load(&_gone)) {
         if (error) *error = mtp_error(ENXIO, @"phone disconnected");
@@ -360,6 +399,18 @@ static IOUSBHostPipe *find_pipe(IOUSBHostInterface *iface, int xferType, bool in
     put32(cmd + 8, tid);
     for (int i = 0; i < count; i++) put32(cmd + kHeaderLen + 4 * i, params[i]);
     if (![self bulkOut:[NSData dataWithBytes:cmd length:cmdLen] error:error]) return NO;
+    if (send) {
+        NSMutableData *out = [NSMutableData dataWithLength:kHeaderLen];
+        uint8_t *h = out.mutableBytes;
+        put32(h, (uint32_t)MIN(kHeaderLen + send.length, 0xFFFFFFFFu));
+        put16(h + 4, kContainerData);
+        put16(h + 6, code);
+        put32(h + 8, tid);
+        [out appendData:send];
+        if (![self bulkOut:out error:error]) return NO;
+        // A container that fills its last packet needs a zero-length packet to end it.
+        if (out.length % _outPacket == 0 && ![self bulkOut:[NSData data] error:error]) return NO;
+    }
 
     NSUInteger n = 0;
     if (![self bulkIn:_rx length:kChunk got:&n error:error]) return NO;
@@ -436,6 +487,14 @@ static IOUSBHostPipe *find_pipe(IOUSBHostInterface *iface, int xferType, bool in
        data:(NSMutableData *)data error:(NSError **)error {
     [_lock lock];
     BOOL ok = [self transact:code params:params count:count data:data response:NULL error:error];
+    [_lock unlock];
+    return ok;
+}
+
+- (BOOL)run:(uint16_t)code params:(const uint32_t *)params count:(int)count
+       send:(NSData *)send response:(uint32_t *)resp error:(NSError **)error {
+    [_lock lock];
+    BOOL ok = [self transact:code params:params count:count send:send data:nil response:resp error:error];
     [_lock unlock];
     return ok;
 }
@@ -634,6 +693,95 @@ static IOUSBHostPipe *find_pipe(IOUSBHostInterface *iface, int xferType, bool in
         }
     }
     return !r.bad;
+}
+
+#pragma mark Writing
+
+- (MTPObjectInfo *)createObjectNamed:(NSString *)name
+                           directory:(BOOL)directory
+                           inStorage:(uint32_t)storageID
+                              parent:(uint32_t)parent
+                               error:(NSError **)error {
+    NSString *now = format_date([NSDate date]);
+    NSMutableData *info = [NSMutableData data];
+    wr32(info, storageID);
+    wr16(info, directory ? MTPObjectFormatAssociation : 0x3000);  // undefined, the phone infers it from the name
+    wr16(info, 0);  // protection status
+    wr32(info, 0);  // size: created empty, filled with edit operations
+    wr16(info, 0);  // thumb format
+    for (int i = 0; i < 6; i++) wr32(info, 0);  // thumb size and dimensions, image dimensions, bit depth
+    wr32(info, parent == MTPRootParent ? 0 : parent);  // the dataset spells "top level" as 0
+    wr16(info, directory ? 1 : 0);  // association type: generic folder
+    wr32(info, 0);  // association description
+    wr32(info, 0);  // sequence number
+    wrstr(info, name);
+    wrstr(info, now);  // capture date
+    wrstr(info, now);  // modification date
+    wrstr(info, @"");  // keywords
+
+    uint32_t params[2] = {storageID, parent};
+    uint32_t resp[5] = {0};
+    [_lock lock];
+    BOOL ok = [self transact:kOpSendObjectInfo params:params count:2 send:info data:nil response:resp error:error];
+    // Files need their (empty) contents sent right after the info.
+    if (ok && !directory) ok = [self transact:kOpSendObject params:NULL count:0 send:[NSData data] data:nil response:NULL error:error];
+    [_lock unlock];
+    if (!ok) return nil;
+
+    MTPObjectInfo *o = [MTPObjectInfo new];
+    o.handle = resp[2];
+    o.storageID = storageID;
+    o.parent = parent;
+    o.format = directory ? MTPObjectFormatAssociation : 0x3000;
+    o.filename = name;
+    o.created = o.modified = [NSDate date];
+    return o;
+}
+
+- (BOOL)deleteObject:(uint32_t)handle error:(NSError **)error {
+    uint32_t params[2] = {handle, 0};
+    return [self run:kOpDeleteObject params:params count:2 data:nil error:error];
+}
+
+- (BOOL)renameObject:(uint32_t)handle to:(NSString *)name error:(NSError **)error {
+    NSMutableData *value = [NSMutableData data];
+    wrstr(value, name);
+    uint32_t params[2] = {handle, kPropFileName};
+    return [self run:kOpSetObjectPropValue params:params count:2 send:value response:NULL error:error];
+}
+
+- (BOOL)canMoveObjects {
+    return [_deviceInfo supportsOperation:kOpMoveObject];
+}
+
+- (BOOL)moveObject:(uint32_t)handle toStorage:(uint32_t)storageID parent:(uint32_t)parent error:(NSError **)error {
+    uint32_t params[3] = {handle, storageID, parent};
+    return [self run:kOpMoveObject params:params count:3 data:nil error:error];
+}
+
+- (BOOL)canEditObjects {
+    return [_deviceInfo supportsOperation:kOpAndroidBeginEditObject] &&
+           [_deviceInfo supportsOperation:kOpAndroidSendPartialObject] &&
+           [_deviceInfo supportsOperation:kOpAndroidTruncateObject] &&
+           [_deviceInfo supportsOperation:kOpAndroidEndEditObject];
+}
+
+- (BOOL)beginEditing:(uint32_t)handle error:(NSError **)error {
+    return [self run:kOpAndroidBeginEditObject params:&handle count:1 data:nil error:error];
+}
+
+- (BOOL)endEditing:(uint32_t)handle error:(NSError **)error {
+    return [self run:kOpAndroidEndEditObject params:&handle count:1 data:nil error:error];
+}
+
+- (BOOL)writeObject:(uint32_t)handle offset:(uint64_t)offset data:(NSData *)data error:(NSError **)error {
+    uint32_t params[4] = {handle, (uint32_t)offset, (uint32_t)(offset >> 32), (uint32_t)data.length};
+    return [self run:kOpAndroidSendPartialObject params:params count:4 send:data response:NULL error:error];
+}
+
+- (BOOL)truncateObject:(uint32_t)handle length:(uint64_t)length error:(NSError **)error {
+    uint32_t params[3] = {handle, (uint32_t)length, (uint32_t)(length >> 32)};
+    return [self run:kOpAndroidTruncateObject params:params count:3 data:nil error:error];
 }
 
 - (NSData *)readObject:(uint32_t)handle offset:(uint64_t)offset length:(uint32_t)length error:(NSError **)error {

@@ -3,16 +3,18 @@
 //   mtpfs [-s SERIAL] MOUNTPOINT [FUSE options]
 //
 // Each MTP storage ("Internal shared storage", an SD card) is a folder at the
-// top of the volume. Read-only for now. Exits and unmounts when the phone goes
-// away.
+// top of the volume. Writable on phones with Android's edit extensions,
+// read-only otherwise. Exits and unmounts when the phone goes away.
 
 #define FUSE_USE_VERSION 312
 #import <fuse.h>
+#import <fuse_lowlevel.h>  // FUSE_SET_ATTR_*
 
 // macFUSE's fuse.h maps fuse_loop_mt to this without declaring it.
 int fuse_loop_mt_312(struct fuse *f, struct fuse_loop_config *config);
 
 #import <pthread.h>
+#import <sys/mount.h>
 
 #import "MTPDevice.h"
 
@@ -30,6 +32,10 @@ static const uint32_t kMaxRead = 4 << 20;
 @property (nullable, copy) NSDate *created, *modified;
 @property (nullable, copy) NSArray<Node *> *children;
 @property NSTimeInterval listedAt;
+// Open-for-writing count and whether an Android edit session is open; both
+// guarded by @synchronized(node).
+@property int writers;
+@property BOOL editing;
 @end
 
 @implementation Node
@@ -38,6 +44,7 @@ static const uint32_t kMaxRead = 4 << 20;
 static MTPDevice *g_dev;
 static Node *g_root;
 static NSLock *g_lock;  // guards the node tree
+static BOOL g_writable;
 static uint64_t g_total, g_free;
 static NSDateFormatter *g_logTime;
 
@@ -166,13 +173,62 @@ static Node *resolve(const char *path, int *err) {
     return n;
 }
 
+// Resolves the folder a new or renamed entry goes into, and its name.
+static Node *resolve_parent(const char *path, NSString **name, int *err) {
+    NSString *p = @(path);
+    *name = p.lastPathComponent;
+    Node *dir = resolve(p.stringByDeletingLastPathComponent.fileSystemRepresentation, err);
+    if (dir && !dir.isDirectory) {
+        *err = -ENOTDIR;
+        return nil;
+    }
+    if (dir == g_root) {
+        *err = -EACCES;  // only storages live at the top
+        return nil;
+    }
+    return dir;
+}
+
+static Node *node_for(MTPObjectInfo *info, Node *dir) {
+    Node *n = [Node new];
+    n.storageID = dir.storageID;
+    n.handle = info.handle;
+    n.isDirectory = info.isDirectory;
+    n.size = info.size;
+    n.name = info.filename;
+    n.created = info.created;
+    n.modified = info.modified;
+    return n;
+}
+
+static void add_child(Node *dir, Node *n) {
+    if (dir.children) dir.children = [dir.children arrayByAddingObject:n];
+}
+
+static void remove_child(Node *dir, Node *n) {
+    NSMutableArray *a = [dir.children mutableCopy];
+    [a removeObjectIdenticalTo:n];
+    dir.children = a;
+}
+
+static uint32_t parent_handle(Node *dir) {
+    return dir.isStorage ? MTPRootParent : dir.handle;
+}
+
+// Finder's metadata files would clutter the phone; refuse them.
+static BOOL is_mac_metadata(NSString *name) {
+    return [name hasPrefix:@"._"] || [name isEqualToString:@".DS_Store"];
+}
+
 static struct timespec ts(NSDate *d) {
     return (struct timespec){(time_t)d.timeIntervalSince1970, 0};
 }
 
 static void fill_attr(Node *n, struct fuse_darwin_attr *a) {
     memset(a, 0, sizeof *a);
-    a->mode = n.isDirectory ? (S_IFDIR | 0555) : (S_IFREG | 0444);
+    // The top level holds only the storages, so it stays read-only.
+    BOOL rw = g_writable && n != g_root;
+    a->mode = n.isDirectory ? (S_IFDIR | (rw ? 0755 : 0555)) : (S_IFREG | (rw ? 0644 : 0444));
     a->nlink = n.isDirectory ? 2 : 1;
     a->uid = getuid();
     a->gid = getgid();
@@ -229,20 +285,240 @@ static int op_readdir(const char *path, void *buf, fuse_darwin_fill_dir_t filler
     return children ? 0 : err;
 }
 
+static BOOL wants_write(struct fuse_file_info *fi) {
+    return (fi->flags & O_ACCMODE) != O_RDONLY;
+}
+
+static void attach(Node *n, struct fuse_file_info *fi) {
+    if (wants_write(fi)) @synchronized(n) { n.writers++; }
+    fi->fh = (uint64_t)(uintptr_t)CFBridgingRetain(n);
+}
+
 static int op_open(const char *path, struct fuse_file_info *fi) {
-    if ((fi->flags & O_ACCMODE) != O_RDONLY) return -EROFS;
+    if (wants_write(fi) && !g_writable) return -EROFS;
     [g_lock lock];
     int err = 0;
     Node *n = resolve(path, &err);
     if (n && n.isDirectory) err = -EISDIR;
-    if (n && !n.isDirectory) fi->fh = (uint64_t)(uintptr_t)CFBridgingRetain(n);
+    if (n && !n.isDirectory) attach(n, fi);
     [g_lock unlock];
     return err;
 }
 
-static int op_release(const char *path, struct fuse_file_info *fi) {
-    if (fi->fh) CFBridgingRelease((CFTypeRef)(uintptr_t)fi->fh);
+// Commits an Android edit session, which makes the phone index the new contents.
+static int end_editing(Node *n) {
+    @synchronized(n) {
+        if (!n.editing) return 0;
+        n.editing = NO;
+        NSError *err = nil;
+        if (![g_dev endEditing:n.handle error:&err]) {
+            logmsg(@"finishing %@: %@", n.name, err.localizedDescription);
+            return errno_for_device();
+        }
+        n.modified = [NSDate date];
+    }
     return 0;
+}
+
+static int op_release(const char *path, struct fuse_file_info *fi) {
+    Node *n = CFBridgingRelease((CFTypeRef)(uintptr_t)fi->fh);
+    if (!n || !wants_write(fi)) return 0;
+    BOOL last;
+    @synchronized(n) { last = --n.writers == 0; }
+    return last ? end_editing(n) : 0;
+}
+
+static int op_fsync(const char *path, int datasync, struct fuse_file_info *fi) {
+    Node *n = (__bridge Node *)(void *)(uintptr_t)fi->fh;
+    return n ? end_editing(n) : 0;
+}
+
+static int begin_editing(Node *n) {
+    @synchronized(n) {
+        if (n.editing) return 0;
+        NSError *err = nil;
+        if (![g_dev beginEditing:n.handle error:&err]) {
+            logmsg(@"editing %@: %@", n.name, err.localizedDescription);
+            return errno_for_device();
+        }
+        n.editing = YES;
+    }
+    return 0;
+}
+
+static int op_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+    Node *n = (__bridge Node *)(void *)(uintptr_t)fi->fh;
+    if (!n || offset < 0) return -EINVAL;
+    int rc = begin_editing(n);
+    if (rc) return rc;
+    NSError *err = nil;
+    NSData *data = [NSData dataWithBytesNoCopy:(void *)buf length:size freeWhenDone:NO];
+    if (![g_dev writeObject:n.handle offset:(uint64_t)offset data:data error:&err]) {
+        logmsg(@"write %@ at %lld: %@", n.name, offset, err.localizedDescription);
+        return errno_for_device();
+    }
+    @synchronized(n) { n.size = MAX(n.size, (uint64_t)offset + size); }
+    return (int)size;
+}
+
+static int op_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+    if (!g_writable) return -EROFS;
+    [g_lock lock];
+    int err = 0;
+    NSString *name = nil;
+    Node *dir = resolve_parent(path, &name, &err);
+    if (dir && is_mac_metadata(name)) err = -EACCES;
+    if (dir && !err) {
+        Node *existing = child_named(children_of(dir, INFINITY), name);
+        if (existing) {
+            if (existing.isDirectory) err = -EISDIR;
+            else attach(existing, fi);
+        } else {
+            NSError *e = nil;
+            MTPObjectInfo *info = [g_dev createObjectNamed:name directory:NO inStorage:dir.storageID
+                                                    parent:parent_handle(dir) error:&e];
+            if (info) {
+                Node *n = node_for(info, dir);
+                add_child(dir, n);
+                attach(n, fi);
+            } else {
+                logmsg(@"create %@: %@", name, e.localizedDescription);
+                err = errno_for_device();
+            }
+        }
+    }
+    [g_lock unlock];
+    return err;
+}
+
+static int op_mkdir(const char *path, mode_t mode) {
+    if (!g_writable) return -EROFS;
+    [g_lock lock];
+    int err = 0;
+    NSString *name = nil;
+    Node *dir = resolve_parent(path, &name, &err);
+    if (dir && child_named(children_of(dir, INFINITY), name)) err = -EEXIST;
+    if (dir && !err) {
+        NSError *e = nil;
+        MTPObjectInfo *info = [g_dev createObjectNamed:name directory:YES inStorage:dir.storageID
+                                                parent:parent_handle(dir) error:&e];
+        if (info) {
+            Node *n = node_for(info, dir);
+            n.children = @[];
+            n.listedAt = [NSDate timeIntervalSinceReferenceDate];
+            add_child(dir, n);
+        } else {
+            logmsg(@"mkdir %@: %@", name, e.localizedDescription);
+            err = errno_for_device();
+        }
+    }
+    [g_lock unlock];
+    return err;
+}
+
+static int remove_entry(const char *path, BOOL directory) {
+    if (!g_writable) return -EROFS;
+    [g_lock lock];
+    int err = 0;
+    NSString *name = nil;
+    Node *dir = resolve_parent(path, &name, &err);
+    Node *n = dir ? child_named(children_of(dir, INFINITY), name) : nil;
+    if (dir && !n) err = -ENOENT;
+    if (n && n.isDirectory != directory) err = directory ? -ENOTDIR : -EISDIR;
+    if (n && !err && directory) {
+        NSArray *inside = children_of(n, 0);
+        if (!inside) err = errno_for_device();
+        else if (inside.count) err = -ENOTEMPTY;
+    }
+    if (n && !err) {
+        NSError *e = nil;
+        if ([g_dev deleteObject:n.handle error:&e]) {
+            remove_child(dir, n);
+        } else {
+            logmsg(@"delete %@: %@", name, e.localizedDescription);
+            err = errno_for_device();
+        }
+    }
+    [g_lock unlock];
+    return err;
+}
+
+static int op_unlink(const char *path) { return remove_entry(path, NO); }
+static int op_rmdir(const char *path) { return remove_entry(path, YES); }
+
+static int op_rename(const char *from, const char *to, unsigned int flags) {
+    if (!g_writable) return -EROFS;
+    if (flags & RENAME_EXCHANGE) return -ENOTSUP;
+    [g_lock lock];
+    int err = 0;
+    NSString *fromName = nil, *toName = nil;
+    Node *fromDir = resolve_parent(from, &fromName, &err);
+    Node *toDir = fromDir ? resolve_parent(to, &toName, &err) : nil;
+    Node *n = toDir ? child_named(children_of(fromDir, INFINITY), fromName) : nil;
+    Node *target = n ? child_named(children_of(toDir, INFINITY), toName) : nil;
+    if (toDir && !n) err = -ENOENT;
+    if (target == n) target = nil;  // a change of case only
+    if (target && (flags & RENAME_NOREPLACE)) err = -EEXIST;
+    if (target && !err) {
+        if (target.isDirectory != n.isDirectory) err = target.isDirectory ? -EISDIR : -ENOTDIR;
+        else if (target.isDirectory && [children_of(target, 0) count]) err = -ENOTEMPTY;
+    }
+    if (fromDir != toDir && !err && !g_dev.canMoveObjects) err = -EXDEV;  // callers fall back to copying
+
+    NSError *e = nil;
+    if (n && !err && target) {
+        if ([g_dev deleteObject:target.handle error:&e]) remove_child(toDir, target);
+        else err = errno_for_device();
+    }
+    if (n && !err && fromDir != toDir) {
+        if ([g_dev moveObject:n.handle toStorage:toDir.storageID parent:parent_handle(toDir) error:&e]) {
+            remove_child(fromDir, n);
+            n.storageID = toDir.storageID;
+            add_child(toDir, n);
+        } else {
+            err = errno_for_device();
+        }
+    }
+    if (n && !err && ![fromName isEqualToString:toName]) {
+        if ([g_dev renameObject:n.handle to:toName error:&e]) n.name = toName;
+        else err = errno_for_device();
+    }
+    if (e) logmsg(@"rename %@ to %@: %@", fromName, toName, e.localizedDescription);
+    [g_lock unlock];
+    return err;
+}
+
+static int op_setattr(const char *path, struct fuse_darwin_attr *attr, int to_set, struct fuse_file_info *fi) {
+    // Permissions, owners and times aren't stored over MTP; accept and ignore
+    // them so copies don't fail. Only the size matters.
+    if (!(to_set & FUSE_SET_ATTR_SIZE)) return 0;
+    if (!g_writable) return -EROFS;
+    Node *n = fi ? (__bridge Node *)(void *)(uintptr_t)fi->fh : nil;
+    if (!n) {
+        [g_lock lock];
+        int err = 0;
+        n = resolve(path, &err);
+        [g_lock unlock];
+        if (!n) return err;
+    }
+    if (n.isDirectory) return -EISDIR;
+    BOOL open;
+    @synchronized(n) { open = n.writers > 0; }
+    int rc = begin_editing(n);
+    if (rc) return rc;
+    NSError *err = nil;
+    if (![g_dev truncateObject:n.handle length:(uint64_t)attr->size error:&err]) {
+        logmsg(@"truncate %@: %@", n.name, err.localizedDescription);
+        rc = errno_for_device();
+    } else {
+        @synchronized(n) { n.size = (uint64_t)attr->size; }
+    }
+    // Not open: commit now rather than at release.
+    if (!open) {
+        int end = end_editing(n);
+        if (!rc) rc = end;
+    }
+    return rc;
 }
 
 static int op_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
@@ -268,6 +544,9 @@ static int op_read(const char *path, char *buf, size_t size, off_t offset, struc
 }
 
 static int op_statfs(const char *path, struct statfs *st) {
+    [g_lock lock];
+    children_of(g_root, 5);  // refreshes free space
+    [g_lock unlock];
     memset(st, 0, sizeof *st);
     st->f_bsize = 4096;
     st->f_iosize = kMaxRead;
@@ -279,13 +558,32 @@ static int op_statfs(const char *path, struct statfs *st) {
 #pragma mark - Main
 
 static struct fuse *g_fuse;
+static const char *g_mountPoint;
 
-// Ends the FUSE loop once the phone is unplugged, which unmounts the volume.
-static void *watch_unplug(void *arg) {
-    while (!g_dev.disconnected) sleep(1);
-    logmsg(@"phone disconnected; unmounting");
-    if (g_fuse) fuse_exit(g_fuse);
-    return NULL;
+static BOOL still_mounted(void) {
+    struct statfs fs;
+    return statfs(g_mountPoint, &fs) == 0 && strcmp(fs.f_mntonname, g_mountPoint) == 0;
+}
+
+// macFUSE's FSKit backend doesn't end the FUSE loop when the volume is
+// ejected from Finder, and the loop doesn't notice an unplugged phone, so
+// watch for both and exit.
+static void *watch_mount(void *arg) {
+    for (;;) {
+        sleep(1);
+        if (g_dev.disconnected) {
+            logmsg(@"phone disconnected; unmounting");
+            unmount(g_mountPoint, MNT_FORCE);
+            break;
+        }
+        if (!still_mounted()) {
+            logmsg(@"volume was ejected");
+            break;
+        }
+    }
+    [g_dev close];
+    logmsg(@"unmounted");
+    exit(0);
 }
 
 int main(int argc, char **argv) {
@@ -341,11 +639,22 @@ int main(int argc, char **argv) {
             .release = op_release,
             .read = op_read,
             .statfs = op_statfs,
+            .write = op_write,
+            .create = op_create,
+            .mkdir = op_mkdir,
+            .unlink = op_unlink,
+            .rmdir = op_rmdir,
+            .rename = op_rename,
+            .setattr = op_setattr,
+            .fsync = op_fsync,
         };
 
         struct fuse_args args = FUSE_ARGS_INIT(0, NULL);
         fuse_opt_add_arg(&args, argv[0]);
-        NSString *opts = [NSString stringWithFormat:@"backend=fskit,rdonly,volname=%@,fsname=mtp:%@", product,
+        g_writable = g_dev.canEditObjects;
+        if (!g_writable) logmsg(@"phone lacks Android's edit operations; mounting read-only");
+        NSString *opts = [NSString stringWithFormat:@"backend=fskit,%@volname=%@,fsname=mtp:%@",
+                                                    g_writable ? @"" : @"rdonly,", product,
                                                     g_dev.deviceInfo.serialNumber];
         fuse_opt_add_arg(&args, "-o");
         fuse_opt_add_arg(&args, opts.UTF8String);
@@ -359,11 +668,15 @@ int main(int argc, char **argv) {
         }
         // SIGINT/SIGTERM end the loop and unmount, instead of leaving a dead mount.
         fuse_set_signal_handlers(fuse_get_session(g_fuse));
+        g_mountPoint = realpath(argv[optind], NULL) ?: argv[optind];
         pthread_t t;
-        pthread_create(&t, NULL, watch_unplug, NULL);
+        pthread_create(&t, NULL, watch_mount, NULL);
         pthread_detach(t);
         struct fuse_loop_config *loop = fuse_loop_cfg_create();
         int rc = fuse_loop_mt(g_fuse, loop);
+        // The loop reports an error when the volume goes away under it; an
+        // eject is still a clean exit.
+        if (!still_mounted()) rc = 0;
         fuse_loop_cfg_destroy(loop);
         fuse_remove_signal_handlers(fuse_get_session(g_fuse));
         fuse_unmount(g_fuse);

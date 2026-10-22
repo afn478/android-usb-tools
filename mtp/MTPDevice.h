@@ -70,6 +70,22 @@ typedef NS_ENUM(uint16_t, MTPObjectFormat) {
                          length:(uint32_t)length
                           error:(NSError **)error;
 
+// Writing. Files are created empty and filled with Android's edit
+// extensions: begin, write/truncate at any offset, end.
+- (nullable MTPObjectInfo *)createObjectNamed:(NSString *)name
+                                    directory:(BOOL)directory
+                                    inStorage:(uint32_t)storageID
+                                       parent:(uint32_t)parent
+                                        error:(NSError **)error;
+- (BOOL)deleteObject:(uint32_t)handle error:(NSError **)error;
+- (BOOL)renameObject:(uint32_t)handle to:(NSString *)name error:(NSError **)error;
+@property (readonly) BOOL canMoveObjects, canEditObjects;
+- (BOOL)moveObject:(uint32_t)handle toStorage:(uint32_t)storageID parent:(uint32_t)parent error:(NSError **)error;
+- (BOOL)beginEditing:(uint32_t)handle error:(NSError **)error;
+- (BOOL)endEditing:(uint32_t)handle error:(NSError **)error;
+- (BOOL)writeObject:(uint32_t)handle offset:(uint64_t)offset data:(NSData *)data error:(NSError **)error;
+- (BOOL)truncateObject:(uint32_t)handle length:(uint64_t)length error:(NSError **)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

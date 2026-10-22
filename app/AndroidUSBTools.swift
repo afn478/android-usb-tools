@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var store: SCDynamicStore?
     private var approvalTimer: Timer?
     private var promptedForApproval = false
+    private lazy var files = FileAccess { [weak self] in self?.refresh() }
 
     /// The background permission is tied to where the app lives, so it's only
     /// requested once the app has been dragged into /Applications.
@@ -41,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
 
         watchStatus()
+        files.start()
         guard isInApplications else {
             refresh()
             return
@@ -51,6 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         registerHelper()
         refresh()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        files.stop()
     }
 
     // MARK: Installation
@@ -140,6 +146,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             [URL(fileURLWithPath: logPath)],
             withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"),
             configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    // MARK: Files
+
+    @objc private func openVolume() { files.openVolume() }
+    @objc private func ejectVolume() { files.eject() }
+    @objc private func mountVolume() { files.mount() }
+    @objc private func toggleOpenInFinder() { files.openInFinder.toggle() }
+
+    @objc private func getMacFUSE() {
+        NSWorkspace.shared.open(URL(string: "https://macfuse.github.io")!)
+    }
+
+    @objc private func showMountLog() {
+        NSWorkspace.shared.open(
+            [FileAccess.logURL],
+            withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"),
+            configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    @objc private func enableMacFUSE() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Turn on macFUSE"
+        alert.informativeText = """
+            \(appName) shows your phone in Finder through macFUSE, which needs to be switched on once.
+
+            In the window that opens, click ⓘ next to File System Extensions, choose “By Category” at the top, \
+            and switch on macFUSE and macFUSE (local). (The switches in the “By Application” view don’t stay on.)
+
+            Then unplug your phone and plug it in again.
+            """
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Not Now")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+        }
     }
 
     // MARK: Status
@@ -244,6 +287,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             _ = action("Turn On Tethering…", #selector(restartSetup))
         }
         _ = action("Show Log", #selector(openLog))
+
+        menu.addItem(.separator())
+        header("Files")
+        switch files.state {
+        case .noPhone:
+            info("No phone in File transfer mode")
+        case .needsMacFUSE:
+            info("Showing your phone in Finder needs macFUSE")
+            _ = action("Get macFUSE…", #selector(getMacFUSE))
+        case .needsExtension:
+            info("macFUSE is switched off")
+            _ = action("Turn On macFUSE…", #selector(enableMacFUSE))
+        case .mounting(let phone):
+            info("Opening \(phone.name)…")
+        case .mounted(let phone, _):
+            info("\(phone.name) is in Finder")
+            _ = action("Open in Finder", #selector(openVolume))
+            _ = action("Eject \(phone.name)", #selector(ejectVolume))
+        case .ejected(let phone):
+            info("\(phone.name) is ejected")
+            _ = action("Show in Finder", #selector(mountVolume))
+        case .failed(let phone, let reason):
+            info("Couldn’t open \(phone.name)")
+            info(String(reason.prefix(60)))
+            _ = action("Try Again", #selector(mountVolume))
+            _ = action("Show Log", #selector(showMountLog))
+        }
+        let finder = action("Open Finder When Connected", #selector(toggleOpenInFinder))
+        finder.state = files.openInFinder ? .on : .off
 
         menu.addItem(.separator())
         let login = action("Open at Login", #selector(toggleLoginItem))
