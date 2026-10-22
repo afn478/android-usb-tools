@@ -212,6 +212,9 @@ final class FileAccess {
     private func exited(_ p: Process, phone: Phone) {
         guard process === p else { return }
         process = nil
+        // mtpfs pauses Image Capture's ptpcamerad while mounted and resumes it
+        // on exit; make sure of that even if it crashed.
+        if p.terminationReason == .uncaughtSignal { resumeImageCapture() }
         let stillConnected = self.phone == phone
         if case .ejected = state { return }
         if p.terminationStatus == 0 {
@@ -239,6 +242,13 @@ final class FileAccess {
         } else {
             state = .failed(phone, reason)
         }
+    }
+
+    private func resumeImageCapture() {
+        let pkill = Process()
+        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        pkill.arguments = ["-CONT", "-x", "-U", String(getuid()), "ptpcamerad"]
+        try? pkill.run()
     }
 
     private func lastLogLine() -> String? {

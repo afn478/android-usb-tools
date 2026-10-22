@@ -53,6 +53,12 @@ typedef NS_ENUM(uint16_t, MTPObjectFormat) {
 - (void)close;
 
 @property (readonly) BOOL disconnected;
+
+// Image Capture's ptpcamerad keeps retrying a phone someone else holds,
+// disrupting transfers. Pause stops the copies that have it open; close
+// resumes them.
+- (void)pauseImageCapture;
+- (void)resumeImageCapture;
 @property (readonly) MTPDeviceInfo *deviceInfo;
 
 - (nullable NSArray<NSNumber *> *)storageIDs:(NSError **)error;

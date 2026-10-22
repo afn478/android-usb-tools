@@ -625,11 +625,30 @@ static BOOL still_mounted(void) {
 // ejected from Finder, and the loop doesn't notice an unplugged phone, so
 // watch for both and exit.
 static void *watch_mount(void *arg) {
-    for (;;) {
+    // The FSKit mount finishes asynchronously; only an unmount after it has
+    // appeared counts as an eject.
+    BOOL seen = NO;
+    pid_t parent = getppid();
+    for (int waited = 0;; waited++) {
         sleep(1);
+        [g_dev pauseImageCapture];
+        if (!seen) {
+            seen = still_mounted();
+            if (!seen && waited >= 30) {
+                logmsg(@"volume never appeared");
+                break;
+            }
+            if (!seen) continue;
+        }
         if (g_dev.disconnected) {
             logmsg(@"phone disconnected; unmounting");
             unmount(g_mountPoint, MNT_FORCE);
+            break;
+        }
+        // Whoever started us (the app) is gone; don't outlive it.
+        if (getppid() != parent) {
+            logmsg(@"parent exited; unmounting");
+            unmount(g_mountPoint, 0);
             break;
         }
         if (!still_mounted()) {

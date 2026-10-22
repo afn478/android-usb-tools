@@ -242,7 +242,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // The helper replaces the key by removing and re-adding it; let the
             // pair settle before redrawing so the icon doesn't flicker.
             NSObject.cancelPreviousPerformRequests(withTarget: me, selector: #selector(AppDelegate.refresh), object: nil)
-            me.perform(#selector(AppDelegate.refresh), with: nil, afterDelay: 0.2)
+            me.perform(#selector(AppDelegate.refresh), with: nil, afterDelay: 0.2, inModes: [.common])
         }, &ctx)
         guard let store else { return }
         SCDynamicStoreSetNotificationKeys(store, [statusKey] as CFArray, nil)
@@ -285,7 +285,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             button.image?.isTemplate = true
             button.appearsDisabled = false
         }
+        // Rebuild an open menu in place, so plugging the phone in or switching
+        // its mode shows up without reopening it.
+        if menuIsOpen, let menu = statusItem.menu { menuNeedsUpdate(menu) }
     }
+
+    private var menuIsOpen = false
+
+    func menuWillOpen(_ menu: NSMenu) { menuIsOpen = true }
+    func menuDidClose(_ menu: NSMenu) { menuIsOpen = false }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()

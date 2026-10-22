@@ -203,6 +203,8 @@ static NSDate *parse_date(NSString *s) {
     BOOL _noPropList;  // the phone can't list folders with GetObjectPropList
     NSLock *_lock;
     atomic_bool _gone;
+    io_service_t _service;
+    NSMutableSet<NSNumber *> *_paused;  // ptpcamerad pids we stopped
 }
 
 static NSString *reg_string(io_service_t svc, const char *key) {
@@ -211,6 +213,15 @@ static NSString *reg_string(io_service_t svc, const char *key) {
     CFRelease(k);
     id obj = CFBridgingRelease(v);
     return [obj isKindOfClass:[NSString class]] ? obj : nil;
+}
+
+// The pid in UsbExclusiveOwner ("pid 123, name") when `name` holds the interface.
+static pid_t exclusive_owner(io_service_t iface, const char *name) {
+    NSString *owner = reg_string(iface, "UsbExclusiveOwner");
+    int pid = 0;
+    char who[64] = {0};
+    if (!owner || sscanf(owner.UTF8String, "pid %d, %63s", &pid, who) != 2) return 0;
+    return strcmp(who, name) == 0 && pid > 0 ? pid : 0;
 }
 
 static NSString *parent_string(io_service_t iface, const char *key) {
@@ -270,6 +281,9 @@ static IOUSBHostPipe *find_pipe(IOUSBHostInterface *iface, int xferType, bool in
 - (instancetype)initWithService:(io_service_t)service error:(NSError **)error {
     if (!(self = [super init])) return nil;
     _lock = [NSLock new];
+    _paused = [NSMutableSet set];
+    IOObjectRetain(service);
+    _service = service;
     dispatch_queue_t q = dispatch_queue_create("mtp.interest", DISPATCH_QUEUE_SERIAL);
     __weak MTPDevice *weakSelf = self;
     IOUSBHostInterestHandler interest = ^(IOUSBHostObject *obj, uint32_t type, void *arg) {
@@ -279,15 +293,24 @@ static IOUSBHostPipe *find_pipe(IOUSBHostInterface *iface, int xferType, bool in
     NSError *err = nil;
     _iface = [[IOUSBHostInterface alloc] initWithIOService:service options:IOUSBHostObjectInitOptionsNone
                                                      queue:q error:&err interestHandler:interest];
-    if (!_iface) {
-        // Something else (Image Capture's ptpcamerad, usually) holds the
-        // interface; ask it to let go.
+    // Image Capture's ptpcamerad claims MTP phones whenever nobody else has
+    // them, and ignores requests to let go. It runs per user and launchd
+    // restarts it on demand, so stop it and take the interface before it's
+    // back.
+    for (int i = 0; !_iface && i < 50; i++) {
+        // It ignores SIGTERM while it has a device open.
+        pid_t owner = exclusive_owner(service, "ptpcamerad");
+        if (owner) kill(owner, i < 5 ? SIGTERM : SIGKILL);
+        usleep(100000);
         err = nil;
-        _iface = [[IOUSBHostInterface alloc] initWithIOService:service options:IOUSBHostObjectInitOptionsDeviceSeize
+        _iface = [[IOUSBHostInterface alloc] initWithIOService:service options:IOUSBHostObjectInitOptionsNone
                                                          queue:q error:&err interestHandler:interest];
     }
     if (!_iface) {
-        if (error) *error = mtp_error(1, @"cannot claim the MTP interface: %@", err.localizedDescription);
+        NSString *owner = reg_string(service, "UsbExclusiveOwner");
+        if (error)
+            *error = mtp_error(1, @"cannot claim the MTP interface%@%@: %@", owner ? @", held by " : @"", owner ?: @"",
+                               err.localizedDescription);
         return nil;
     }
     _in = find_pipe(_iface, kIOUSBEndpointTypeBulk, true, &_inPacket);
@@ -326,7 +349,35 @@ static IOUSBHostPipe *find_pipe(IOUSBHostInterface *iface, int xferType, bool in
     _in = _out = nil;
     [_iface destroy];
     _iface = nil;
+    [self resumeImageCapture];
+    if (_service) IOObjectRelease(_service);
+    _service = 0;
     [_lock unlock];
+}
+
+// While it can't have the phone, ptpcamerad retries every couple of seconds,
+// and each retry aborts transfers on the interface. Stopping it (rather than
+// killing it, which launchd answers with a fresh copy) keeps it quiet.
+- (void)pauseImageCapture {
+    if (!_service) return;
+    io_iterator_t it = 0;
+    if (IORegistryEntryGetChildIterator(_service, kIOServicePlane, &it) != KERN_SUCCESS) return;
+    io_registry_entry_t child;
+    while ((child = IOIteratorNext(it))) {
+        NSString *creator = reg_string(child, "IOUserClientCreator");
+        int pid = 0;
+        char who[64] = {0};
+        if (creator && sscanf(creator.UTF8String, "pid %d, %63s", &pid, who) == 2 && !strcmp(who, "ptpcamerad") &&
+            pid > 0 && ![_paused containsObject:@(pid)] && kill(pid, SIGSTOP) == 0)
+            [_paused addObject:@(pid)];
+        IOObjectRelease(child);
+    }
+    IOObjectRelease(it);
+}
+
+- (void)resumeImageCapture {
+    for (NSNumber *pid in _paused) kill(pid.intValue, SIGCONT);
+    [_paused removeAllObjects];
 }
 
 - (BOOL)disconnected {
