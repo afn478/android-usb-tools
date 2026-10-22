@@ -20,7 +20,7 @@ build/rndis-tether: src/main.m
 	@mkdir -p build
 	clang $(CFLAGS) $(FRAMEWORKS) -o $@ $<
 
-build/$(EXE): app/AndroidUSBTools.swift app/FileAccess.swift
+build/$(EXE): app/AndroidUSBTools.swift app/FileAccess.swift app/PhoneWatcher.swift
 	@mkdir -p build
 	swiftc -O -parse-as-library -target $(ARCH)-apple-macos13.0 -o $@ $^
 

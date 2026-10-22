@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var approvalTimer: Timer?
     private var promptedForApproval = false
     private lazy var files = FileAccess { [weak self] in self?.refresh() }
+    private lazy var phones = PhoneWatcher { [weak self] in self?.refresh() }
 
     /// The background permission is tied to where the app lives, so it's only
     /// requested once the app has been dragged into /Applications.
@@ -43,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         watchStatus()
         files.start()
+        phones.start()
         guard isInApplications else {
             refresh()
             return
@@ -185,6 +187,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    // MARK: USB mode help
+
+    @objc private func showModeHelp() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Which USB mode do I need?"
+        var now: String
+        if let phone = phones.phones.first {
+            switch phone.mode {
+            case .fileTransfer:
+                now = "\(phone.name) is in File transfer mode, so its files are in Finder."
+            case .tethering:
+                now = "\(phone.name) is in USB tethering mode, so your Mac can use its internet."
+            case .noData:
+                now = "\(phone.name) is only charging. Choose a mode on the phone to use it with your Mac."
+            case .photos:
+                now = "\(phone.name) is in PTP mode, which only shares photos. Choose File transfer instead."
+            case .midi:
+                now = "\(phone.name) is in MIDI mode, which \(appName) doesn’t use."
+            }
+        } else {
+            now = "No Android phone is connected. Plug it in with a USB data cable (some cables only charge)."
+        }
+        alert.informativeText = """
+            \(now)
+
+            File transfer: browse, copy and edit the phone’s files in Finder.
+            USB tethering: use the phone’s internet on this Mac.
+
+            To switch, unlock the phone, pull down from the top of the screen and tap the USB notification \
+            (it may say “Charging this device via USB”). File transfer is in that list. USB tethering is either \
+            in the same list or under Settings → Network & internet → Hotspot & tethering.
+
+            Most phones do one at a time. \(appName) notices the switch and changes over by itself.
+            """
+        alert.addButton(withTitle: "OK")
+        if case .mounted = files.state {
+            alert.addButton(withTitle: "Open in Finder")
+            if alert.runModal() == .alertSecondButtonReturn { files.openVolume() }
+        } else {
+            alert.runModal()
+        }
+    }
+
     // MARK: Status
 
     private func watchStatus() {
@@ -262,6 +308,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
 
+        header("Phone")
+        if phones.phones.isEmpty {
+            info("No Android phone connected")
+        }
+        for phone in phones.phones {
+            info("\(phone.name): \(phone.mode.title)")
+        }
+        _ = action("Which USB Mode Do I Need?…", #selector(showModeHelp))
+
+        menu.addItem(.separator())
         header("USB Tethering")
         switch state {
         case .notInApplications:
