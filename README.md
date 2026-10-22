@@ -96,3 +96,9 @@ sudo build/rndis-tether -v      # bring the link up in the foreground
   USB link's speed (about 35 MB/s on USB 2).
 - IPv4 only; IPv6 from the phone is ignored.
 - The link appears as `utunN`, not as an Ethernet service in System Settings.
+
+## License
+
+MIT; see [LICENSE](LICENSE). The MTP protocol handling in `mtp/` follows
+[go-mtpfs](https://github.com/hanwen/go-mtpfs) (BSD-3-Clause, see
+[mtp/LICENSE.go-mtpfs](mtp/LICENSE.go-mtpfs)).
