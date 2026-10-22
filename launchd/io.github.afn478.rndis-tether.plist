@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.github.afn478.rndis-tether</string>
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/rndis-tether</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>io.github.afn478.Tether</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardErrorPath</key>
+    <string>/var/log/rndis-tether.log</string>
+</dict>
+</plist>
