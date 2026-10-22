@@ -88,6 +88,9 @@ sudo build/rndis-tether -v      # bring the link up in the foreground
 
 - File transfer: one phone at a time. Folder listings come from the phone and
   are cached for a few seconds, so changes made on the phone show up after
-  that. Very large folders (thousands of files) are slow in Finder.
+  that. Large folders are slow to open: macFUSE's FSKit backend costs about
+  a millisecond per file, so a 6,000-photo camera folder takes 5–8 s, though
+  the phone itself sends the listing in under a second. Copying runs at the
+  USB link's speed (about 35 MB/s on USB 2).
 - IPv4 only; IPv6 from the phone is ignored.
 - The link appears as `utunN`, not as an Ethernet service in System Settings.

@@ -22,6 +22,10 @@ int fuse_loop_mt_312(struct fuse *f, struct fuse_loop_config *config);
 // lookup misses (macOS probes for many files that don't exist).
 static const NSTimeInterval kListingTTL = 2;
 static const NSTimeInterval kMissTTL = 10;
+// How long macOS may cache names and attributes without asking us.
+static const double kAttrTTL = 30;
+// Smallest amount fetched from the phone per read.
+static const uint32_t kReadAhead = 1 << 20;
 static const uint32_t kMaxRead = 4 << 20;
 
 @interface Node : NSObject
@@ -30,15 +34,34 @@ static const uint32_t kMaxRead = 4 << 20;
 @property uint64_t size;
 @property (copy) NSString *name;
 @property (nullable, copy) NSDate *created, *modified;
-@property (nullable, copy) NSArray<Node *> *children;
+// Setting the children also rebuilds `index`, for lookups by name.
+@property (nullable, copy, nonatomic) NSArray<Node *> *children;
+@property (nullable, readonly) NSDictionary<NSString *, Node *> *index;
 @property NSTimeInterval listedAt;
 // Open-for-writing count and whether an Android edit session is open; both
 // guarded by @synchronized(node).
 @property int writers;
 @property BOOL editing;
+// The last chunk read from the phone, so small sequential reads (Finder,
+// Quick Look) don't each cost a round trip; guarded by @synchronized(node).
+@property uint64_t cachedOffset;
+@property (nullable) NSData *cached;
 @end
 
+// Lookups ignore case and Unicode normalization, like the phone's storage.
+static NSString *index_key(NSString *name) {
+    return name.precomposedStringWithCanonicalMapping.lowercaseString;
+}
+
 @implementation Node
+
+- (void)setChildren:(NSArray<Node *> *)children {
+    _children = [children copy];
+    NSMutableDictionary *index = [NSMutableDictionary dictionaryWithCapacity:children.count];
+    for (Node *c in children) index[index_key(c.name)] = c;
+    _index = index;
+}
+
 @end
 
 static MTPDevice *g_dev;
@@ -137,10 +160,14 @@ static NSArray<Node *> *children_of(Node *dir, NSTimeInterval maxAge) {
     return merged;
 }
 
-static Node *child_named(NSArray<Node *> *children, NSString *name) {
-    for (Node *c in children)
-        if ([c.name compare:name options:NSCaseInsensitiveSearch] == NSOrderedSame) return c;
-    return nil;
+// The entry called `name` in `dir`, from a listing no older than maxAge;
+// sets *failed when the listing can't be read.
+static Node *child_named(Node *dir, NSString *name, NSTimeInterval maxAge, BOOL *failed) {
+    if (!children_of(dir, maxAge)) {
+        if (failed) *failed = YES;
+        return nil;
+    }
+    return dir.index[index_key(name)];
 }
 
 // Resolves a FUSE path; sets *err to a negative errno on failure.
@@ -156,13 +183,12 @@ static Node *resolve(const char *path, int *err) {
         // entry right after listing a folder. Only a miss asks the phone
         // again, and not more often than kMissTTL.
         Node *next = nil;
-        for (int pass = 0; pass < 2 && !next; pass++) {
-            NSArray *children = children_of(n, pass ? kMissTTL : INFINITY);
-            if (!children) {
-                *err = errno_for_device();
-                return nil;
-            }
-            next = child_named(children, part);
+        BOOL failed = NO;
+        for (int pass = 0; pass < 2 && !next && !failed; pass++)
+            next = child_named(n, part, pass ? kMissTTL : INFINITY, &failed);
+        if (failed) {
+            *err = errno_for_device();
+            return nil;
         }
         if (!next) {
             *err = -ENOENT;
@@ -243,11 +269,12 @@ static void fill_attr(Node *n, struct fuse_darwin_attr *a) {
 #pragma mark - FUSE operations
 
 static void *op_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
-    // MTP has no inode numbers worth exposing and the phone can change behind
-    // our back, so keep the kernel's caches short.
-    cfg->entry_timeout = kListingTTL;
-    cfg->attr_timeout = kListingTTL;
-    cfg->negative_timeout = 1;
+    // Let macOS keep names and attributes for a while: Finder looks up every
+    // entry of a folder it shows, and each lookup that reaches us crosses
+    // macFUSE's FSKit layer. Listing a folder still asks the phone again.
+    cfg->entry_timeout = kAttrTTL;
+    cfg->attr_timeout = kAttrTTL;
+    cfg->negative_timeout = 2;
     return NULL;
 }
 
@@ -357,7 +384,10 @@ static int op_write(const char *path, const char *buf, size_t size, off_t offset
         logmsg(@"write %@ at %lld: %@", n.name, offset, err.localizedDescription);
         return errno_for_device();
     }
-    @synchronized(n) { n.size = MAX(n.size, (uint64_t)offset + size); }
+    @synchronized(n) {
+        n.size = MAX(n.size, (uint64_t)offset + size);
+        n.cached = nil;
+    }
     return (int)size;
 }
 
@@ -369,7 +399,7 @@ static int op_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
     Node *dir = resolve_parent(path, &name, &err);
     if (dir && is_mac_metadata(name)) err = -EACCES;
     if (dir && !err) {
-        Node *existing = child_named(children_of(dir, INFINITY), name);
+        Node *existing = child_named(dir, name, INFINITY, NULL);
         if (existing) {
             if (existing.isDirectory) err = -EISDIR;
             else attach(existing, fi);
@@ -397,7 +427,7 @@ static int op_mkdir(const char *path, mode_t mode) {
     int err = 0;
     NSString *name = nil;
     Node *dir = resolve_parent(path, &name, &err);
-    if (dir && child_named(children_of(dir, INFINITY), name)) err = -EEXIST;
+    if (dir && child_named(dir, name, INFINITY, NULL)) err = -EEXIST;
     if (dir && !err) {
         NSError *e = nil;
         MTPObjectInfo *info = [g_dev createObjectNamed:name directory:YES inStorage:dir.storageID
@@ -422,7 +452,7 @@ static int remove_entry(const char *path, BOOL directory) {
     int err = 0;
     NSString *name = nil;
     Node *dir = resolve_parent(path, &name, &err);
-    Node *n = dir ? child_named(children_of(dir, INFINITY), name) : nil;
+    Node *n = dir ? child_named(dir, name, INFINITY, NULL) : nil;
     if (dir && !n) err = -ENOENT;
     if (n && n.isDirectory != directory) err = directory ? -ENOTDIR : -EISDIR;
     if (n && !err && directory) {
@@ -454,8 +484,8 @@ static int op_rename(const char *from, const char *to, unsigned int flags) {
     NSString *fromName = nil, *toName = nil;
     Node *fromDir = resolve_parent(from, &fromName, &err);
     Node *toDir = fromDir ? resolve_parent(to, &toName, &err) : nil;
-    Node *n = toDir ? child_named(children_of(fromDir, INFINITY), fromName) : nil;
-    Node *target = n ? child_named(children_of(toDir, INFINITY), toName) : nil;
+    Node *n = toDir ? child_named(fromDir, fromName, INFINITY, NULL) : nil;
+    Node *target = n ? child_named(toDir, toName, INFINITY, NULL) : nil;
     if (toDir && !n) err = -ENOENT;
     if (target == n) target = nil;  // a change of case only
     if (target && (flags & RENAME_NOREPLACE)) err = -EEXIST;
@@ -480,8 +510,12 @@ static int op_rename(const char *from, const char *to, unsigned int flags) {
         }
     }
     if (n && !err && ![fromName isEqualToString:toName]) {
-        if ([g_dev renameObject:n.handle to:toName error:&e]) n.name = toName;
-        else err = errno_for_device();
+        if ([g_dev renameObject:n.handle to:toName error:&e]) {
+            n.name = toName;
+            toDir.children = toDir.children;  // re-index under the new name
+        } else {
+            err = errno_for_device();
+        }
     }
     if (e) logmsg(@"rename %@ to %@: %@", fromName, toName, e.localizedDescription);
     [g_lock unlock];
@@ -511,7 +545,10 @@ static int op_setattr(const char *path, struct fuse_darwin_attr *attr, int to_se
         logmsg(@"truncate %@: %@", n.name, err.localizedDescription);
         rc = errno_for_device();
     } else {
-        @synchronized(n) { n.size = (uint64_t)attr->size; }
+        @synchronized(n) {
+            n.size = (uint64_t)attr->size;
+            n.cached = nil;
+        }
     }
     // Not open: commit now rather than at release.
     if (!open) {
@@ -524,19 +561,38 @@ static int op_setattr(const char *path, struct fuse_darwin_attr *attr, int to_se
 static int op_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
     Node *n = (__bridge Node *)(void *)(uintptr_t)fi->fh;
     if (!n || offset < 0) return -EINVAL;
-    uint64_t end = MIN(n.size, (uint64_t)offset + size);
+    uint64_t fileSize;
+    @synchronized(n) { fileSize = n.size; }
+    uint64_t end = MIN(fileSize, (uint64_t)offset + size);
     size_t done = 0;
     for (uint64_t off = (uint64_t)offset; off < end;) {
-        uint32_t len = (uint32_t)MIN(end - off, kMaxRead);
-        NSError *err = nil;
-        NSData *d = [g_dev readObject:n.handle offset:off length:len error:&err];
-        if (!d) {
-            logmsg(@"read %@ at %llu: %@", n.name, off, err.localizedDescription);
-            return done ? (int)done : errno_for_device();
+        NSData *chunk = nil;
+        uint64_t chunkOffset = 0;
+        @synchronized(n) {
+            if (n.cached && off >= n.cachedOffset && off < n.cachedOffset + n.cached.length) {
+                chunk = n.cached;
+                chunkOffset = n.cachedOffset;
+            }
         }
-        if (!d.length) break;
-        size_t take = MIN(d.length, (size_t)(end - off));
-        memcpy(buf + done, d.bytes, take);
+        if (!chunk) {
+            // Small reads fetch a whole read-ahead chunk; big ones go straight through.
+            uint32_t len = (uint32_t)MIN(fileSize - off, MAX(MIN(end - off, kMaxRead), kReadAhead));
+            NSError *err = nil;
+            chunk = [g_dev readObject:n.handle offset:off length:len error:&err];
+            if (!chunk) {
+                logmsg(@"read %@ at %llu: %@", n.name, off, err.localizedDescription);
+                return done ? (int)done : errno_for_device();
+            }
+            if (!chunk.length) break;
+            chunkOffset = off;
+            @synchronized(n) {
+                n.cached = chunk;
+                n.cachedOffset = off;
+            }
+        }
+        size_t skip = (size_t)(off - chunkOffset);
+        size_t take = MIN(chunk.length - skip, (size_t)(end - off));
+        memcpy(buf + done, (const uint8_t *)chunk.bytes + skip, take);
         done += take;
         off += take;
     }
